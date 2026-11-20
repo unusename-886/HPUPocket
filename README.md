@@ -12,7 +12,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-0.2.7--hpu-brightgreen)](../../releases)
-[![Android](https://img.shields.io/badge/Android-12%2B-3ddc84?style=flat&logo=android&logoColor=white)](#下载安装)
+[![Android](https://img.shields.io/badge/Android-12%2B-3ddc84?style=flat&logo=android&logoColor=white)](#构建)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7f52ff?style=flat&logo=kotlin&logoColor=white)](#技术栈)
 ![Tests](https://img.shields.io/badge/unit%20tests-288-brightgreen)
 
@@ -253,6 +253,26 @@ tools/               开发脚本（如按真机几何生成小组件预览图�
 | 后台 | 前台服务（番茄钟计时）+ AlarmManager（小组件在上下课时刻刷新） |
 | 桌面小组件 | AppWidgetProvider + RemoteViews + XML（**不用 Glance**，理由见 `docs/design/UI与登录设计.md` §2.6） |
 | 后端 | **没有**。不经过任何自建中转服务器，账号凭据与数据只在设备和学校系统之间流动 |
+
+
+## 构建
+
+前提：**JDK 21**（Gradle 8.9 跑不动 JDK 25；Android Studio 自带的 JBR 若是 25，必须手动切到 21，
+否则同步报 `Unsupported class file major version`）、Android Studio Meerkat 2024.3.1 或更新、
+compileSdk 36。AGP 8.7.3 是刻意固定的，配 `android.suppressUnsupportedCompileSdk=36` 压掉警告并实测可用 ——
+**不要顺手升级 AGP / Gradle / Kotlin**，会带出一串连锁改动。
+
+```bash
+./gradlew :app:testDebugUnitTest   # 单元测试（288 个）
+./gradlew :app:assembleDebug       # 调试包
+./gradlew :app:assembleRelease     # 发布包（开了 R8 混淆与资源压缩）
+```
+
+发布包默认走 **debug 签名**；在项目根放一份 `keystore.properties`（已在 `.gitignore` 里）
+才会切到自己的 `hpupocket` 签名配置。仓库已配国内镜像（阿里云 + 华为云），首次 Sync 慢属正常。
+
+逐步骤的环境配置、真机运行、失败时导出日志见
+[Android Studio 操作指南](docs/Android%20Studio%20操作指南.md)。
 
 
 ## 隐私与边界
