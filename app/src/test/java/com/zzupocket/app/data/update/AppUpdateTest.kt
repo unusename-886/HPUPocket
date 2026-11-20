@@ -72,4 +72,18 @@ class AppUpdateTest {
         val latest = "0.34.0"
         assertTrue(AppUpdate.shouldShowDot("0.32.5", latest, muted = "0.32.9"))
     }
+
+    @Test
+    fun `未配置发布源时入口整条隐藏`() {
+        // 河南理工版还没配置自己的 release 仓库，`RELEASES_URL` 必须保持为空：
+        // 空串时更多页不显示「检测更新」，开屏也不发请求（否则用户会点到一个假结论）。
+        //
+        // 这是条**护栏测试**：哪天有人把 URL 填上，它会失败并提醒确认 ——
+        // 填成上游 3beuml/ZZUPocket 的话，远端 0.36.x 会压过本版版本号，
+        // 误提示用户去装外校应用。配置好自己的仓库后，把这条改成 assertTrue。
+        assertFalse(
+            "RELEASES_URL 已被填入：确认它不是上游郑大版仓库，再更新本测试",
+            AppReleaseClient.isConfigured,
+        )
+    }
 }

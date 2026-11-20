@@ -111,6 +111,15 @@ object AppReleaseClient {
 
     private const val RELEASES_URL = ""
 
+    /**
+     * 是否已经配好本版本的发布源。
+     *
+     * UI 靠这个值决定「系统 → 检测更新」入口要不要显示 —— 空串时整条功能是关的，
+     * 入口露在外面只会让用户点了得到一句假的「已是最新版本」。填上 URL 后入口自动出现，
+     * 不需要另外改界面代码。
+     */
+    val isConfigured: Boolean get() = RELEASES_URL.isNotBlank()
+
     /** 检测只求「问一下」：起连/整次都用短超时，开屏静默场景与手动场景都不该卡很久 */
     private val http = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)

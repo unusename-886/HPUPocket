@@ -14,7 +14,7 @@
 [![Release](https://img.shields.io/badge/release-0.2.7--hpu-brightgreen)](../../releases)
 [![Android](https://img.shields.io/badge/Android-12%2B-3ddc84?style=flat&logo=android&logoColor=white)](#构建)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7f52ff?style=flat&logo=kotlin&logoColor=white)](#技术栈)
-![Tests](https://img.shields.io/badge/unit%20tests-282-brightgreen)
+![Tests](https://img.shields.io/badge/unit%20tests-283-brightgreen)
 
 > ⚠️ 本项目是非官方项目。
 > 接口来自公开网页的协议整理与社区项目经验，**随时可能失效或被学校调整**；
@@ -230,7 +230,8 @@ app/src/main/java/com/zzupocket/app/
 │   ├── db/          Room 实体与 DAO、通用 TTL 缓存
 │   ├── prefs/       DataStore（界面 / 小组件 / 专注偏好）+ 加密令牌
 │   ├── repo/        Repository：把接口与本地库缝在一起
-│   └── update/      GitHub Release 版本检测（**当前未启用**：`RELEASES_URL` 为空，函数直接返回）
+│   └── update/      GitHub Release 版本检测（**当前未启用**：`RELEASES_URL` 为空，
+│                    更多页不显示入口、开屏也不发请求）
 ├── domain/          纯数据模型与统计口径（课表、节次、冲突分段、周次对齐）
 ├── focus/           番茄钟引擎、通知、前台服务
 └── ui/              Compose 界面：today / schedule / focus / campus / electricity /
@@ -263,7 +264,7 @@ compileSdk 36。AGP 8.7.3 是刻意固定的，配 `android.suppressUnsupportedC
 **不要顺手升级 AGP / Gradle / Kotlin**，会带出一串连锁改动。
 
 ```bash
-./gradlew :app:testDebugUnitTest   # 单元测试（282 个）
+./gradlew :app:testDebugUnitTest   # 单元测试（283 个）
 ./gradlew :app:assembleDebug       # 调试包
 ./gradlew :app:assembleRelease     # 发布包（开了 R8 混淆与资源压缩）
 ```

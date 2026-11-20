@@ -61,6 +61,7 @@ import com.zzupocket.app.core.AppGraph
 import com.zzupocket.app.data.prefs.UiPrefs
 import com.zzupocket.app.ui.components.DescriptionText
 import com.zzupocket.app.ui.components.LocalShowDescriptions
+import com.zzupocket.app.data.update.AppReleaseClient
 import com.zzupocket.app.data.update.AppUpdate
 import com.zzupocket.app.data.update.UpdateCenter
 import com.zzupocket.app.ui.nav.DOCK_CLEARANCE
@@ -201,19 +202,25 @@ fun CampusScreen(
             GroupTitle("系统")
             EntryCard {
                 // 有新 release 时副标题直接给出结论 + 图标红点；否则留一句"手动检查"的引导。
-                Entry(
-                    Icons.Filled.SystemUpdate,
-                    "检测更新",
-                    if (showDot) {
-                        "发现新版本 v${remoteRelease?.version} · 点击查看"
-                    } else {
-                        "当前 v$currentVersion · 点这里手动检查"
-                    },
-                    { showUpdateDialog = true },
-                    // 版本号 / 有无新版是状态，不是描述
-                    alwaysShowSubtitle = true,
-                    badge = showDot,
-                )
+                //
+                // 没配发布源时**整条隐藏**：检测函数会直接返回 null，入口留着只会在用户点进来
+                // 之后给出「已是最新版本」——那是个假结论，比看不到入口更糟。
+                // 本版（河南理工）刻意不配：拉了会命中上游郑大版的 release，误提示去装外校应用。
+                if (AppReleaseClient.isConfigured) {
+                    Entry(
+                        Icons.Filled.SystemUpdate,
+                        "检测更新",
+                        if (showDot) {
+                            "发现新版本 v${remoteRelease?.version} · 点击查看"
+                        } else {
+                            "当前 v$currentVersion · 点这里手动检查"
+                        },
+                        { showUpdateDialog = true },
+                        // 版本号 / 有无新版是状态，不是描述
+                        alwaysShowSubtitle = true,
+                        badge = showDot,
+                    )
+                }
                 Entry(
                     Icons.Filled.DeleteSweep,
                     "存储空间",
