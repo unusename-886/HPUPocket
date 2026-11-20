@@ -1,10 +1,23 @@
 # 统一换行符，避免 Windows 上每次 git 都刷 "LF will be replaced by CRLF" 警告。
-# .bat 必须是 CRLF（cmd 对 LF 的批处理会解析出错），其余统一 LF。
+# .bat/.cmd 必须是 CRLF（cmd 对 LF 的批处理会解析出错），其余统一 LF。
 * text=auto eol=lf
 *.bat text eol=crlf
+*.cmd text eol=crlf
 gradlew text eol=lf
+
+# 明确按二进制处理，避免被 text=auto 误判后做换行转换（一改就损坏）
 *.jar binary
 *.jks binary
 *.keystore binary
+*.apk binary
+*.aab binary
+*.zip binary
+*.hprof binary
 *.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
 *.webp binary
+
+# 测试用的真实页面样本：原样保留，且不计入语言统计
+app/src/test/resources/*.html linguist-vendored

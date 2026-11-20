@@ -1,0 +1,28 @@
+root = true
+
+# 全仓库统一：UTF-8、LF、文件末尾留空行、去行尾空格
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{kt,kts,gradle}]
+indent_size = 4
+max_line_length = 120
+
+[*.{xml,json,yml,yaml,toml,properties}]
+indent_size = 4
+
+[*.md]
+# Markdown 行尾两个空格是「硬换行」语法，绝不能自动删
+trim_trailing_whitespace = false
+
+[*.{bat,cmd}]
+# cmd 对 LF 的批处理会解析出错，保持 CRLF
+end_of_line = crlf
+
+[*.py]
+indent_size = 4
