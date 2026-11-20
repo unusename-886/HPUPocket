@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「一周课表」的一列（一天）：两行列头（大字星期 + 小字日期，横向不挤）
+  + 节次格容器。列宽由父容器均分（weight=1）；格子由 App 渲染时
+  addView(widget_week_cell) 进来，每个节次槽一个格子（空槽也是等高占位）。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1"
+    android:baselineAligned="false"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/week_day_char"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="@string/widget_preview_today_header"
+            android:textColor="@color/widget_text"
+            android:textSize="11dp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/week_day_date"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="@string/widget_preview_week"
+            android:textColor="@color/widget_text_dim"
+            android:textSize="7.5dp" />
+    </LinearLayout>
+
+    <!-- 节次格容器；下方 4dp 留白与列头隔开 -->
+    <LinearLayout
+        android:id="@+id/week_cells"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="4dp"
+        android:layout_weight="1"
+        android:orientation="vertical" />
+</LinearLayout>

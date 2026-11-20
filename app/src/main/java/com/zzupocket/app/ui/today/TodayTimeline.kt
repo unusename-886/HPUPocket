@@ -1,0 +1,195 @@
+package com.zzupocket.app.ui.today
+
+import com.zzupocket.app.core.ScheduleText
+import com.zzupocket.app.domain.Period
+import com.zzupocket.app.domain.PlanColor
+import com.zzupocket.app.domain.ScheduleBlock
+import java.time.Instant
+import java.time.ZoneId
+import java.util.Locale
+
+/** 时间轴上一段的类型 */
+enum class TimelineKind { COURSE, FOCUS, GAP }
+
+/**
+ * 时间轴上的一段。时间统一换算成"当天第几分钟"（0..1440），便于排序与渲染。
+ *
+ * 这里是**纯数据 + 纯计算**，不依赖 Android/Room，方便单测（见 TodayTimelineTest）。
+ */
+data class TimelineEntry(
+    val kind: TimelineKind,
+    /** 当天第几分钟 */
+    val startMin: Int,
+    val endMin: Int,
+    val title: String = "",
+    val subtitle: String = "",
+    val colorArgb: Long? = null,
+    /** COURSE：今天已经在这门课上专注的秒数 */
+    val focusSeconds: Int = 0,
+    /** GAP：这段空档里已经专注掉的秒数 */
+    val usedSeconds: Int = 0,
+    /** 只有尚未选择显示课程的冲突才带此字段；已处理的冲突按普通课程显示。 */
+    val conflictCourseNames: List<String> = emptyList(),
+) {
+    val minutes: Int get() = (endMin - startMin).coerceAtLeast(0)
+    val hasUnresolvedConflict: Boolean get() = conflictCourseNames.size > 1
+
+    /** 某一分钟是否落在这段里（左闭右开） */
+    fun covers(minute: Int): Boolean = minute >= startMin && minute < endMin
+}
+
+/**
+ * 「今天」页时间轴的构建规则。
+ *
+ * 一根轴回答一个问题：**我这一天长什么样**。轴上只放三类东西——
+ * 上课（来自课表）、空档（课与课之间剩下的时间）、已完成的专注（来自番茄钟）。
+ * 经典番茄钟 App 没有课表，也就没有"空档"这个概念，这是校园场景独有的东西。
+ */
+object TodayTimeline {
+
+    /** 短于这个长度的空档不值得单独占一行 */
+    const val MIN_GAP_MIN = 15
+
+    /** 将课表显示分段转为时间轴，避免首页另选一门课或丢失按周设置。 */
+    fun courseEntries(blocks: List<ScheduleBlock>, periods: List<Period>): List<TimelineEntry> {
+        val visible = mutableListOf<ScheduleBlock>()
+        blocks.sortedWith(compareBy({ it.semesterId }, { it.weekIndex }, { it.weekday }, { it.startUnit })).forEach { block ->
+            val previous = visible.lastOrNull()
+            // 部分重叠选择同一门课后，将相邻片段还原为一行，避免重复课程名。
+            if (previous != null && !previous.showPlaceholder && !block.showPlaceholder &&
+                previous.displaySession.id == block.displaySession.id && previous.endUnit + 1 == block.startUnit
+            ) {
+                visible[visible.lastIndex] = previous.copy(endUnit = block.endUnit)
+            } else {
+                visible += block
+            }
+        }
+        return visible.mapNotNull { block ->
+            val session = block.displaySession
+            val start = minuteOfDay(periods.firstOrNull { it.indexNo == block.startUnit }?.startText ?: session.startTime)
+                ?: return@mapNotNull null
+            val end = minuteOfDay(periods.firstOrNull { it.indexNo == block.endUnit }?.endText ?: session.endTime)
+                ?: (start + 45)
+            if (end <= start) return@mapNotNull null
+            val names = if (block.showPlaceholder) block.sessions.map { it.courseName } else emptyList()
+            TimelineEntry(
+                kind = TimelineKind.COURSE,
+                startMin = start,
+                endMin = end,
+                title = if (block.showPlaceholder) "课程冲突" else session.courseName,
+                subtitle = if (block.showPlaceholder) names.joinToString(" / ")
+                    else ScheduleText.tidyPlace(session.roomText ?: session.campusText).orEmpty(),
+                colorArgb = if (block.showPlaceholder) null else PlanColor.of(session.color)?.argb,
+                conflictCourseNames = names,
+            )
+        }.sortedBy { it.startMin }
+    }
+
+    /** 冲突尚未处理时，不将任意一门课描述成正在上的课程。 */
+    fun nextCourseHint(courses: List<TimelineEntry>, nowMin: Int): String? {
+        courses.firstOrNull { it.covers(nowMin) }?.let { ongoing ->
+            if (ongoing.hasUnresolvedConflict) return "当前时段有课程冲突 · 点按课表查看"
+            return "正在上《${ongoing.title}》· 还有 ${duration(ongoing.endMin - nowMin)}下课"
+        }
+        val next = courses.filter { it.startMin > nowMin }.minByOrNull { it.startMin }
+        if (next != null) {
+            val wait = next.startMin - nowMin
+            val gapText = if (wait < 60) "$wait 分钟" else duration(wait)
+            return if (next.hasUnresolvedConflict) "下一时段 ${clock(next.startMin)} 有课程冲突 · ${gapText}后"
+                else "下一节 ${clock(next.startMin)}《${next.title}》· ${gapText}后"
+        }
+        return if (allCoursesFinished(courses, nowMin)) "今天的课已上完" else null
+    }
+
+    /**
+     * 今天的课是不是全部上完了。
+     *
+     * 首页据此决定要不要在时间轴下面预告明天的第一节课（issue #16）。
+     * 一节课都没有的日子不算"上完"——那种日子归空态提示管，不能再叠一行明天的课。
+     */
+    fun allCoursesFinished(courses: List<TimelineEntry>, nowMin: Int): Boolean =
+        courses.isNotEmpty() && nowMin >= courses.maxOf { it.endMin }
+
+    /**
+     * 把课程与专注记录合成一根时间轴。
+     *
+     * - **空档只画在课与课之间**。早八前、末节课后不画空档：
+     *   那两段时间由卡片顶部的提示负责——"下一节 10:00《…》· 40 分钟后，够一个番茄"、
+     *   "今天的课已上完"。否则一天没课时会画出一条 14 小时的"空档"，纯噪音。
+     * - 一节课都没有时不产生空档（这时由界面提示"今天没课"）。
+     */
+    fun build(
+        courses: List<TimelineEntry>,
+        focuses: List<TimelineEntry>,
+        minGapMin: Int = MIN_GAP_MIN,
+    ): List<TimelineEntry> {
+        val cs = courses.filter { it.endMin > it.startMin }.sortedBy { it.startMin }
+        val fs = focuses.filter { it.endMin > it.startMin }.sortedBy { it.startMin }
+        if (cs.isEmpty() && fs.isEmpty()) return emptyList()
+
+        // 相邻两节课之间剩下的时间就是一个可用的专注窗口
+        val gaps = ArrayList<TimelineEntry>()
+        cs.zipWithNext().forEach { (prev, next) ->
+            if (next.startMin - prev.endMin >= minGapMin) {
+                gaps += gapEntry(prev.endMin, next.startMin, fs)
+            }
+        }
+
+        return (cs + gaps + fs).sortedWith(
+            compareBy({ it.startMin }, { kindRank(it.kind) }),
+        )
+    }
+
+    private fun gapEntry(startMin: Int, endMin: Int, focuses: List<TimelineEntry>): TimelineEntry =
+        TimelineEntry(
+            kind = TimelineKind.GAP,
+            startMin = startMin,
+            endMin = endMin,
+            title = "空档",
+            // 只统计"开始于这段空档内"的专注，避免跨段重复计数
+            usedSeconds = focuses.filter { it.startMin in startMin until endMin }
+                .sumOf { it.minutes * 60 },
+        )
+
+    private fun kindRank(kind: TimelineKind): Int = when (kind) {
+        TimelineKind.COURSE -> 0
+        TimelineKind.GAP -> 1
+        TimelineKind.FOCUS -> 2
+    }
+
+    /** 480 → "08:00" */
+    fun clock(minute: Int): String {
+        val m = ((minute % 1440) + 1440) % 1440
+        return String.format(Locale.US, "%02d:%02d", m / 60, m % 60)
+    }
+
+    /** 80 → "1 小时 20 分"；45 → "45 分钟" */
+    fun duration(minutes: Int): String {
+        val m = minutes.coerceAtLeast(0)
+        val h = m / 60
+        val r = m % 60
+        return when {
+            h == 0 -> "$r 分钟"
+            r == 0 -> "$h 小时"
+            else -> "$h 小时 $r 分"
+        }
+    }
+
+    /** "08:00" / "8:00" → 480；解析不了返回 null */
+    fun minuteOfDay(text: String?): Int? {
+        val t = text?.trim().orEmpty()
+        if (t.isEmpty()) return null
+        val parts = t.split(':')
+        if (parts.size < 2) return null
+        val h = parts[0].toIntOrNull() ?: return null
+        val m = parts[1].take(2).toIntOrNull() ?: return null
+        if (h !in 0..23 || m !in 0..59) return null
+        return h * 60 + m
+    }
+
+    /** 时间戳 → 当天第几分钟（按本地时区） */
+    fun minuteOfEpoch(epochMs: Long, zone: ZoneId = ZoneId.systemDefault()): Int {
+        val t = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalTime()
+        return t.hour * 60 + t.minute
+    }
+}

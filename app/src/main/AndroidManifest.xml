@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 访问学校各系统（统一认证 / 一卡通 / 教务 / 图书馆）必需。
+         缺失时的报错是 "Permission denied (missing INTERNET permission?)"。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 用于判断"当前离线"，从而把界面标注成"数据截至 XX:XX"而不是白屏 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 番茄钟：倒计时通知 + 走完时的提醒。
+         没有 POST_NOTIFICATIONS（Android 13+）时前台服务仍然能跑，但通知不可见。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Android 11 起的包可见性：宿舍用电的「更多功能」要判断微信是否安装并拉起它，
+         不声明的话 getLaunchIntentForPackage("com.tencent.mm") 恒为 null。 -->
+    <queries>
+        <package android:name="com.tencent.mm" />
+    </queries>
+
+    <application
+        android:name=".HPUPocketApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.HPUPocket">
+
+        <!-- 主 Activity 本身不再带 LAUNCHER filter —— 启动入口全部交给下面的
+             activity-alias，每个 alias 一种图标配色。切换时用 PackageManager
+             启用一个、禁用其余（见 core/LauncherIcon.kt）。alias 指向同一个 MainActivity，
+             所以切换图标不影响登录态/数据，只是桌面那枚图标换张皮。 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.HPUPocket" />
+
+        <!-- ── 图标调色盘：6 套 activity-alias，默认启用 blue ────────────────
+             注意：默认 alias 必须与 LauncherIcon 里的 DEFAULT 一致；
+             enabled 只能有一个 true，多开会出多个桌面图标。 -->
+        <activity-alias
+            android:name=".alias.MainActivityBlue"
+            android:exported="true"
+            android:enabled="true"
+            android:icon="@mipmap/ic_launcher_blue"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".alias.MainActivityPurple"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@mipmap/ic_launcher_purple"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".alias.MainActivityTeal"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@mipmap/ic_launcher_teal"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".alias.MainActivityGreen"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@mipmap/ic_launcher_green"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".alias.MainActivityAmber"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@mipmap/ic_launcher_amber"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".alias.MainActivityPink"
+            android:exported="true"
+            android:enabled="false"
+            android:icon="@mipmap/ic_launcher_pink"
+            android:label="@string/app_name"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- ── 桌面小组件（课表 + 电量/校园卡） ────────────────────────────────
+             三个组件都用 AppWidgetProvider + RemoteViews/XML 实现（不是 Glance）：
+             只有 RemoteViews 这条路拿得到 android:previewLayout（选择页里的实时预览）
+             和 RemoteViews.addView（行数可变的课程列表）。理由详见
+             ui/widget/TodayClassesWidget.kt 的类注释。
+
+             exported="false" 是官方文档当前的口径：系统自己能往非导出的组件投
+             APPWIDGET_UPDATE，导出反而给别的 App 留了乱发广播的口子。 -->
+        <receiver
+            android:name=".ui.widget.NextClassWidget"
+            android:exported="false"
+            android:label="@string/widget_next_class">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/next_class_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".ui.widget.TodayClassesWidget"
+            android:exported="false"
+            android:label="@string/widget_today_classes">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/today_classes_widget_info" />
+        </receiver>
+
+        <!-- 一周课表 4×5：按节次对齐、一天一列；列决策/行高/字号全按实测画布自适应
+             （4×2 与它同读一仹本地课表，口径在 WidgetSchedule 纯函数里对齐） -->
+        <receiver
+            android:name=".ui.widget.WeekClassesWidget"
+            android:exported="false"
+            android:label="@string/widget_week_classes">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/week_classes_widget_info" />
+        </receiver>
+
+        <!-- 上下课时间点的刷新闹钟（显式 Intent，不需要 intent-filter）。
+             系统对组件的定时刷新下限是 30 分钟，靠它补偿"上课那一刻桌面还挂着下一节"的问题。 -->
+        <receiver
+            android:name=".ui.widget.WidgetRefreshReceiver"
+            android:exported="false" />
+
+        <!-- 番茄钟前台服务。计时本身不依赖它（时间用墙钟算），
+             它的作用是不让系统回收进程 + 显示常驻倒计时通知。
+             API 34+ 必须声明类型，番茄钟没有更贴切的类型，用 specialUse 并在下面说明用途。 -->
+        <service
+            android:name=".focus.PomodoroService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="pomodoro_timer" />
+        </service>
+
+        <!-- 试运行日志导出：诊断页把日志/share 给微信或邮件，便于分析崩溃 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

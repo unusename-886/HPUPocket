@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  明文流量白名单。
+
+  河南理工（2026-11-19 真机日志修正）：
+  教务 CAS 单点登录的 service 回调会跳到 http://zhjw.hpu.edu.cn/eams/...（日志实证），
+  OkHttp/WebView 跟随重定向时会触发 "CLEARTEXT communication not permitted"。
+  因此放行 hpu.edu.cn 及其子域的明文，否则会话探测与页面跟随会被拦。
+  代价是这些域的明文请求凭据可能不经加密；本 App 只承载会话 Cookie、绝不存密码，
+  且学校 CAS 流本身如此，属现实约束。
+
+  南校区电费查询站是**裸 IP + 明文 HTTP**（http://183.169.255.4:8080），不在 hpu.edu.cn
+  域下。2026-11-20 真机日志：`CLEARTEXT communication to 183.169.255.4 not permitted by
+  network security policy` —— Android 9+ 默认禁止明文，必须单独放行这个 IP，否则南校区
+  电费楼栋列表直接加载失败。该站只做电费查询、无登录凭据，明文风险可控。
+  郑大历史域名（order.lib.zzu.edu.cn / gmsstu.zzu.edu.cn）已移除：HPU 版不会访问外校服务。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">hpu.edu.cn</domain>
+        <!-- 南校区电费站（裸 IP，无登录凭据，仅查询） -->
+        <domain includeSubdomains="false">183.169.255.4</domain>
+    </domain-config>
+</network-security-config>

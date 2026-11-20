@@ -1,0 +1,1196 @@
+package com.zzupocket.app.ui.widget
+
+import com.zzupocket.app.domain.Period
+import com.zzupocket.app.domain.Session
+import com.zzupocket.app.ui.widget.WidgetSchedule.NextClassPreviewStyle
+import com.zzupocket.app.ui.widget.WidgetSchedule.NextClassPreviewStyle.COMPACT
+import com.zzupocket.app.ui.widget.WidgetSchedule.NextClassPreviewStyle.MINI
+import com.zzupocket.app.ui.widget.WidgetSchedule.NextClassPreviewStyle.STACKED
+import kotlin.math.ceil
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.time.LocalDate
+
+/**
+ * 课表小组件口径的回归测试。
+ *
+ * 这一版是照着**拾光课程表**（用户要求"完全按照拾光课表的来"）逐条对齐的，
+ * 所以测试里钉的就是它的那几条规则：
+ *   · 「还没下课的课」= `end_time > now`（正在上的那节算在内，左闭右开）；
+ *   · 4×2 左列今天只列还没下课的 → footer「剩余 N 节」；右列明天列全部 → footer「共有 N 节」；
+ *   · 某列没课 → 整列「无课程」；假期 → 整块「假期中」；
+ *   · 2×2：今天还有课就列今天的；今天没了但明天有 → 表头「明日预告」；
+ *     今明都没课 → 「今天没有课程」/「今日课程已结束」；
+ *   · 一块 = 课名 + （地点／时间段），**不带老师**。
+ */
+class WidgetScheduleTest {
+
+    // ── 造数据 ───────────────────────────────────────────────────────────
+
+    private fun course(
+        start: Int,
+        end: Int,
+        name: String = "课",
+        place: String = "",
+        code: String = "C1",
+    ) = WidgetCourse(code = code, name = name, place = place, startMin = start, endMin = end)
+
+    private fun period(indexNo: Int, start: Int, end: Int) = Period(
+        indexNo = indexNo,
+        nameZh = "第${indexNo}节",
+        startTime = start,
+        endTime = end,
+        dayPart = "MORNING",
+        segmentIndex = indexNo,
+    )
+
+    private fun session(
+        courseName: String = "高等数学A",
+        startUnit: Int = 1,
+        endUnit: Int = 2,
+        startTime: String? = null,
+        endTime: String? = null,
+        roomText: String? = "南2 南2_206",
+        campusText: String? = null,
+    ) = Session(
+        id = "s1",
+        semesterId = 1,
+        source = "eas",
+        courseCode = "MATH001",
+        courseName = courseName,
+        weekIndex = 3,
+        weekday = 1,
+        startUnit = startUnit,
+        endUnit = endUnit,
+        date = null,
+        startTime = startTime,
+        endTime = endTime,
+        teacherName = null,
+        roomText = roomText,
+        campusText = campusText,
+        color = null,
+    )
+
+    private val periods = listOf(period(1, 800, 845), period(2, 850, 935))
+    private val monday = LocalDate.of(2026, 9, 28)
+    private val tuesday = LocalDate.of(2026, 9, 29)
+
+    // ── 基础工具 ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `分钟转时刻补零`() {
+        assertEquals("08:00", WidgetSchedule.clock(480))
+        assertEquals("00:05", WidgetSchedule.clock(5))
+        assertEquals("23:59", WidgetSchedule.clock(-1))
+    }
+
+    @Test
+    fun `时刻解析接受各种写法并拒绝垃圾`() {
+        assertEquals(480, WidgetSchedule.minuteOf("08:00"))
+        assertEquals(480, WidgetSchedule.minuteOf("8:00"))
+        assertEquals(485, WidgetSchedule.minuteOf(" 8:05 "))
+        assertNull(WidgetSchedule.minuteOf(null))
+        assertNull(WidgetSchedule.minuteOf(""))
+        assertNull(WidgetSchedule.minuteOf("25:00"))
+        assertNull(WidgetSchedule.minuteOf("08:99"))
+        assertNull(WidgetSchedule.minuteOf("第八节"))
+    }
+
+    @Test
+    fun `时间段是 无空格的连字符写法_与拾光一致`() {
+        val c = course(600, 695, place = "南3 101")
+        assertEquals("10:00", c.startText)
+        assertEquals("11:35", c.endText)
+        assertEquals("10:00-11:35", c.rangeText)
+    }
+
+    @Test
+    fun `列头带日期_周次文案`() {
+        assertEquals("今天 9.28 周一", WidgetSchedule.dateHeader("今天", monday))
+        assertEquals("明天 9.29 周二", WidgetSchedule.dateHeader("明天", tuesday))
+        assertEquals("第 5 周", WidgetSchedule.weekLabel(5))
+        // 周次未知（假期）不显示
+        assertEquals("", WidgetSchedule.weekLabel(null))
+        assertEquals("", WidgetSchedule.weekLabel(0))
+    }
+
+    @Test
+    fun `星期中文名`() {
+        assertEquals("周一", WidgetSchedule.weekdayName(1))
+        assertEquals("周日", WidgetSchedule.weekdayName(7))
+        assertEquals("第9天", WidgetSchedule.weekdayName(9))
+    }
+
+    // ── 一节课的构造 ─────────────────────────────────────────────────────
+
+    @Test
+    fun `节次时间优先用作息表`() {
+        val c = WidgetSchedule.toCourse(session(), periods)
+        assertEquals(480, c!!.startMin)
+        assertEquals(575, c.endMin)
+        assertEquals("高等数学A", c.name)
+    }
+
+    @Test
+    fun `作息表查不到时退回课程自带时间`() {
+        val c = WidgetSchedule.toCourse(
+            session(startUnit = 99, endUnit = 99, startTime = "14:00", endTime = "15:35"),
+            periods,
+        )
+        assertEquals(840, c!!.startMin)
+        assertEquals(935, c.endMin)
+    }
+
+    @Test
+    fun `地点被规整成 楼栋+房号`() {
+        assertEquals("南2 206", WidgetSchedule.toCourse(session(), periods)!!.place)
+        assertEquals("南1 302", WidgetSchedule.toCourse(session(roomText = "南1_302"), periods)!!.place)
+        assertEquals(
+            "主校区",
+            WidgetSchedule.toCourse(session(roomText = null, campusText = "主校区"), periods)!!.place,
+        )
+    }
+
+    @Test
+    fun `时间完全解析不出来时这一节不显示`() {
+        assertNull(
+            WidgetSchedule.toCourse(
+                session(startUnit = 99, endUnit = 99, startTime = null, endTime = null),
+                periods,
+            ),
+        )
+    }
+
+    @Test
+    fun `缺结束时间时按 45 分钟算`() {
+        val c = WidgetSchedule.toCourse(
+            session(startUnit = 99, endUnit = 99, startTime = "14:00", endTime = null),
+            periods,
+        )
+        assertEquals(840, c!!.startMin)
+        assertEquals(885, c.endMin)
+    }
+
+    @Test
+    fun `一节课变成一行_带地点与时间段`() {
+        val row = WidgetSchedule.toRow(course(600, 695, "大学物理", "南3 101"))
+        assertEquals("大学物理", row.course.name)
+        assertEquals("南3 101", row.place)
+        assertEquals("10:00-11:35", row.timeRange)
+    }
+
+    // ── 状态判定 ─────────────────────────────────────────────────────────
+
+    @Test
+    fun `还没同步课表时不说今天没课`() {
+        val st = WidgetSchedule.state(false, 5, emptyList(), 600)
+        assertEquals(WidgetCourseState.NOT_SYNCED, st)
+        assertEquals("还没有课表数据", WidgetSchedule.statusTitle(st))
+        assertTrue(WidgetSchedule.statusMessage(st).contains("打开 App"))
+    }
+
+    @Test
+    fun `有课表但不在教学周内算假期`() {
+        val st = WidgetSchedule.state(true, null, listOf(course(600, 645)), 600)
+        assertEquals(WidgetCourseState.VACATION, st)
+        assertEquals("假期中", WidgetSchedule.statusTitle(st))
+        assertEquals("期待新学期", WidgetSchedule.statusMessage(st))
+    }
+
+    @Test
+    fun `今天没课与今天的课上完了都写无课程`() {
+        // 用户口径：这两种状态对用户是同一件事（现在没有课），一律写「无课程」。
+        // 以前分成「今天没有课程」「今日课程已结束」两句，还会跟一句「明天的课看右边」——
+        // 而 2×2 根本没有右边，那是 4×2 的文案串味。
+        val blank = WidgetSchedule.state(true, 5, emptyList(), 600)
+        assertEquals(WidgetCourseState.NO_COURSE_TODAY, blank)
+        assertEquals("无课程", WidgetSchedule.statusTitle(blank))
+
+        val finished = WidgetSchedule.state(true, 5, listOf(course(480, 525)), 700)
+        assertEquals(WidgetCourseState.FINISHED_TODAY, finished)
+        assertEquals("无课程", WidgetSchedule.statusTitle(finished))
+        assertEquals("", WidgetSchedule.statusMessage(finished))
+    }
+
+    @Test
+    fun `还没下课的判定是左闭右开`() {
+        val c = course(600, 645)
+        assertTrue(WidgetSchedule.notEnded(c, 599))
+        assertTrue(WidgetSchedule.notEnded(c, 600))
+        assertTrue(WidgetSchedule.notEnded(c, 644))
+        // 下课那一分钟算"已下课"，否则会显示出已经上完的课
+        assertTrue(!WidgetSchedule.notEnded(c, 645))
+    }
+
+    @Test
+    fun `今天还没下课的课要排序且排除已上完的`() {
+        val today = listOf(course(840, 885), course(480, 525), course(600, 645))
+        val remain = WidgetSchedule.remainingToday(today, 620)
+        assertEquals(listOf("10:00", "14:00"), remain.map { it.startText })
+    }
+
+    // ── 4×2：左列今天、右列明天 ──────────────────────────────────────────
+
+    private fun twoDay(
+        hasSchedule: Boolean = true,
+        week: Int? = 5,
+        today: List<WidgetCourse>,
+        tomorrow: List<WidgetCourse> = emptyList(),
+        nowMin: Int,
+        maxRows: Int = 2,
+    ) = WidgetSchedule.twoDayPlan(
+        hasSchedule = hasSchedule,
+        week = week,
+        todayDate = monday,
+        tomorrowDate = tuesday,
+        today = today,
+        tomorrow = tomorrow,
+        nowMin = nowMin,
+        maxRows = maxRows,
+    )
+
+    @Test
+    fun `4×2 左列是今天还没下课的_右边是明天全部`() {
+        val p = twoDay(
+            today = listOf(
+                course(480, 525, "高等数学A", "南2 206"),
+                course(600, 645, "大学物理", "南3 101"),
+                course(840, 885, "线性代数", "南1 302"),
+            ),
+            tomorrow = listOf(
+                course(480, 525, "编译原理实验", "中2414"),
+                course(610, 650, "编译原理", "南4_103"),
+            ),
+            nowMin = 620,   // 正在上 10:00 那节
+        )
+        assertEquals("第 5 周", p.week)
+        assertEquals("今天 9.28 周一", p.today.header)
+        assertEquals("明天 9.29 周二", p.tomorrow.header)
+        // 今天：已上完的不再列，正在上的那节留在最前
+        assertEquals("剩余 2 节", p.today.footer)
+        assertEquals(listOf("大学物理", "线性代数"), p.today.rows.map { it.course.name })
+        assertEquals("", p.today.emptyText)
+        // 明天：全部列出（不看钟点）
+        assertEquals("共有 2 节", p.tomorrow.footer)
+        assertEquals(listOf("编译原理实验", "编译原理"), p.tomorrow.rows.map { it.course.name })
+    }
+
+    @Test
+    fun `4×2 每列最多显示 maxRows 行_footer 仍是总数`() {
+        val five = (0 until 5).map { course(480 + it * 60, 520 + it * 60, "课$it") }
+        val p = twoDay(today = five, tomorrow = five, nowMin = 400, maxRows = 2)
+        assertEquals(2, p.today.rows.size)
+        assertEquals(2, p.tomorrow.rows.size)
+        // footer 报的是"还剩几节"，不是"显示了几行"
+        assertEquals("剩余 5 节", p.today.footer)
+        assertEquals("共有 5 节", p.tomorrow.footer)
+    }
+
+    @Test
+    fun `4×2 某列没课就写无课程`() {
+        val p = twoDay(today = listOf(course(480, 525)), tomorrow = emptyList(), nowMin = 700)
+        assertEquals("无课程", p.today.emptyText)
+        assertTrue(p.today.rows.isEmpty())
+        assertEquals("", p.today.footer)
+        assertEquals("无课程", p.tomorrow.emptyText)
+    }
+
+    @Test
+    fun `4×2 假期整块盖住内容`() {
+        val p = twoDay(
+            week = null,
+            today = listOf(course(600, 645)),
+            tomorrow = listOf(course(600, 645)),
+            nowMin = 600,
+        )
+        assertTrue(p.hasOverlay)
+        assertEquals("假期中", p.overlayTitle)
+        assertEquals("期待新学期", p.overlayMessage)
+        assertEquals("", p.week)
+        assertTrue(p.today.rows.isEmpty())
+    }
+
+    @Test
+    fun `4×2 还没同步课表也整块盖住_不能假装没课`() {
+        // 以前只有假期走整块状态，未同步会退化成两列各写一句「无课程」——
+        // 那是假的：用户会以为课表是空的，而不是"还没同步"。
+        val p = twoDay(hasSchedule = false, week = null, today = emptyList(), tomorrow = emptyList(), nowMin = 600)
+        assertTrue(p.hasOverlay)
+        assertEquals("还没有课表数据", p.overlayTitle)
+        assertTrue(p.overlayMessage.contains("打开 App"))
+        // 不是假期，所以不该写"期待新学期"
+        assertTrue(!p.overlayMessage.contains("新学期"))
+    }
+
+    // ── 2×2：一节课大字 + 圆气泡 + 一行预告 ──────────────────────────────
+
+    private fun nextClass(
+        hasSchedule: Boolean = true,
+        week: Int? = 5,
+        today: List<WidgetCourse>,
+        tomorrow: List<WidgetCourse> = emptyList(),
+        nowMin: Int,
+    ) = WidgetSchedule.nextClassPlan(
+        hasSchedule = hasSchedule,
+        week = week,
+        today = today,
+        tomorrow = tomorrow,
+        nowMin = nowMin,
+    )
+
+    @Test
+    fun `2×2 今天还有课就排头两节_行样式数据完整`() {
+        val p = nextClass(
+            today = listOf(course(600, 695, "大学物理", "南3 101"), course(840, 885, "线性代数")),
+            tomorrow = listOf(course(480, 525, "编译原理实验")),
+            nowMin = 500,
+        )
+        assertEquals("今天 · 第 5 周", p.header)
+        assertEquals("大学物理", p.firstCourse?.name)
+        assertEquals("南3 101", p.firstCourse?.place)
+        // 第二行 = 下一节，完整课程对象（渲染层排成 4×2 同款行）
+        assertEquals("线性代数", p.nextCourse?.name)
+        assertEquals(840, p.nextCourse?.startMin)
+        // 圆气泡已下线，remaining 只作数据口径
+        assertEquals(2, p.remaining)
+        assertTrue(p.hasCourse)
+        assertTrue(!p.isStatus)
+    }
+
+    @Test
+    fun `2×2 正在上的那节算下一节_只剩一节时第二行为空`() {
+        val p = nextClass(
+            today = listOf(course(600, 695, "大学物理", "南3 101")),
+            nowMin = 620,
+        )
+        assertEquals("大学物理", p.firstCourse?.name)
+        assertEquals(1, p.remaining)
+        assertEquals(null, p.nextCourse)
+    }
+
+    @Test
+    fun `2×2 今天没了但明天有_顶上明天的第一节`() {
+        val p = nextClass(
+            today = listOf(course(480, 525, "线性代数")),
+            tomorrow = listOf(course(480, 525, "编译原理实验", "中2414"), course(610, 650, "编译原理", "北3 201")),
+            nowMin = 700,
+        )
+        assertEquals("明日预告 · 第 5 周", p.header)
+        assertEquals("编译原理实验", p.firstCourse?.name)
+        assertEquals(2, p.remaining)
+        assertEquals("编译原理", p.nextCourse?.name)
+        assertEquals("北3 201", p.nextCourse?.place)
+    }
+
+    @Test
+    fun `2×2 今明都没课就是一句无课程`() {
+        val blank = nextClass(today = emptyList(), tomorrow = emptyList(), nowMin = 600)
+        assertTrue(blank.isStatus)
+        assertEquals("无课程", blank.statusTitle)
+        assertEquals("", blank.statusMessage)
+        assertTrue(!blank.hasCourse)
+
+        val finished = nextClass(today = listOf(course(480, 525)), tomorrow = emptyList(), nowMin = 700)
+        assertEquals("无课程", finished.statusTitle)
+    }
+
+    @Test
+    fun `2×2 竖排行自然高与固定开销`() {
+        // 竖排 = 单行版式 44 + 一行地点小字（13dp 行 + 2dp 行距 ≈ 15）
+        assertEquals(59, WidgetSchedule.stackedRowNaturalHeightDp(1))
+        // 课名两行另加 16
+        assertEquals(75, WidgetSchedule.stackedRowNaturalHeightDp(2))
+        // 固定开销 = 内边距 20（10×2）+ 表头 22 + 行距 2
+        assertEquals(44, WidgetSchedule.NEXT_CLASS_CHROME_DP)
+        assertEquals(121, WidgetSchedule.nextClassAvailableDp(165))
+        assertEquals(0, WidgetSchedule.nextClassAvailableDp(0))
+    }
+
+    @Test
+    fun `2×2 多出的节不画_只答下一节`() {
+        // 多出的节不画（2×2 只答"下一节"）
+        val multi = nextClass(
+            today = listOf(course(600, 645, "A"), course(700, 745, "B", "南4 403"), course(800, 845, "C")),
+            nowMin = 500,
+        )
+        assertEquals("B", multi.nextCourse?.name)
+    }
+
+    @Test
+    fun `地点恒一行_先缩字号再裁左边保留教室号`() {
+        val width = 130
+        // 短地点：11dp 原样放下
+        val short = WidgetSchedule.fitPlaceText("南3 101", width, 11, 9)
+        assertEquals("南3 101", short.text)
+        assertEquals(11, short.sizeDp)
+        // 中等：11dp 放不下，缩到 10dp 就完整显示，一个字都不裁
+        val mid = WidgetSchedule.fitPlaceText("南校区综合教学楼 3 层 305", width, 11, 9)
+        assertEquals("南校区综合教学楼 3 层 305", mid.text)
+        assertEquals(10, mid.sizeDp)
+        // 超长：缩到下限 9dp 仍放不下 → 裁左边，保留尾部教室细节
+        val origin = "北校区实验实训中心 B 区 2 层 205 计算机机房（东）"
+        val long = WidgetSchedule.fitPlaceText(origin, width, 11, 9)
+        assertEquals(9, long.sizeDp)
+        assertTrue(long.text.startsWith("…"))
+        assertTrue(long.text.endsWith("（东）"))
+        assertTrue(long.text.length < origin.length)
+    }
+
+    @Test
+    fun `地点适配可以接入安卓Paint实测宽度`() {
+        // 渲染层传的 lambda（这里用一个字固定 10dp 宽代替 Paint）
+        val fit = WidgetSchedule.fitPlaceText("南3 101", 60, 11, 9) { text, _ -> text.length * 10f }
+        assertEquals("南3 101", fit.text)
+        assertEquals(11, fit.sizeDp)
+        val cut = WidgetSchedule.fitPlaceText("南3 101", 40, 11, 9) { text, _ -> text.length * 10f }
+        assertEquals(9, cut.sizeDp)
+        assertEquals("…101", cut.text)
+    }
+
+    @Test
+    fun `2×2 紧凑三行在150dp画布留出安全垫且不降级`() {
+        fun compactNat(lhN: Int, lhS: Int) =
+            lhN + lhS * 2 + WidgetSchedule.NEXT_CLASS_TRIPLE_PAD_DP * 2 + 1
+        // Paint 实测的代表值：13 粗≈16 / 11≈13 / 12 粗≈15 / 10≈12
+        val first = compactNat(16, 13)
+        val second = compactNat(15, 12)
+        val avail = WidgetSchedule.nextClassAvailableDp(150)   // 106（账本 chrome=44，比渲染实测更保守）
+        val budget = avail - WidgetSchedule.NEXT_CLASS_LADDER_BUFFER_DP   // 98
+        assertTrue(
+            "150dp 画布至少要留 6dp 安全垫: sum=${first + second} budget=$budget",
+            budget - (first + second) >= 6,
+        )
+        val n = WidgetSchedule.NextClassRowNaturals(
+            firstStacked = 66, firstCompact = first, firstMini = 30,
+            secondStacked = 62, secondCompact = second, secondMini = 28,
+        )
+        assertEquals(COMPACT to COMPACT, WidgetSchedule.nextClassRowPair(avail, n))
+    }
+
+    @Test
+    fun `2×2 阶梯判档按实测自然高_两行统一紧凑_永不蒸发`() {
+        // 判档纯函数的契约测试：下面构造的 naturals 沿用六轮口径，只验证「阶梯怎么选」，
+        // 不代表七轮渲染层的真实行高（真实值由上面的 150dp 安全垫测试覆盖）。
+        // 满档竖排只留给拉高的 2×3。nextClassRowPair 只从
+        // 满/满 → 紧凑/紧凑 → 紧凑/单行 → 单行/单行 里选，取第一对放得下的；
+        // 全超预算落 (MINI,MINI) —— 第二节课在任何尺寸下都存在。
+        fun nats(
+            lhN1: Int, lhS1: Int, lhN2: Int, lhS2: Int, firstLines: Int, secondLines: Int,
+        ) = WidgetSchedule.NextClassRowNaturals(
+            firstStacked = firstLines * lhN1 + (2 + lhS1) * 2 + 12,
+            firstCompact = firstLines * lhN1 + 2 + lhS1 + 12,
+            firstMini = maxOf(lhN1, lhS1) + 12,
+            secondStacked = secondLines * lhN2 + (2 + lhS2) * 2 + 12,
+            secondCompact = secondLines * lhN2 + 2 + lhS2 + 12,
+            secondMini = maxOf(lhN2, lhS2) + 12,
+        )
+
+        // Meizu/Roboto 口径（真机实测：15粗=20 / 13=17 / 13粗=16 / 12=15），
+        // 2×2 画布 165（SIZES−30 校准），chrome 实测 = 20 + 表头16粗 + 2 = 38 → 可用 127
+        val robotoShort = nats(20, 17, 16, 15, firstLines = 1, secondLines = 1)
+        // 满/满 = 67+62=129 > 预算 119 → 紧凑/紧凑 = 51+45=96 ≤ 119 → 两行统一紧凑
+        assertEquals(
+            COMPACT to COMPACT,
+            WidgetSchedule.nextClassRowPair(127, robotoShort),
+        )
+        // 本节课名两行（长课名）：紧凑/紧凑仍放得下（71+45=116 ≤ 119），课名不撒谎
+        val robotoLongFirst = nats(20, 17, 16, 15, firstLines = 2, secondLines = 1)
+        assertEquals(
+            COMPACT to COMPACT,
+            WidgetSchedule.nextClassRowPair(127, robotoLongFirst),
+        )
+        // 两节课名都两行：紧凑/紧凑超预算 → 紧凑/单行（第二节课名省略，但都在）
+        val robotoLongBoth = nats(20, 17, 16, 15, firstLines = 2, secondLines = 2)
+        assertEquals(
+            COMPACT to MINI,
+            WidgetSchedule.nextClassRowPair(127, robotoLongBoth),
+        )
+        // 极端矮（预算 < 紧凑+单行）→ 单行/单行兜底，第二节课**仍然存在**
+        assertEquals(MINI to MINI, WidgetSchedule.nextClassRowPair(80, robotoShort))
+
+        // HyperOS/MiSans 口径（15粗=21 / 13=18 / 13粗=19 / 12=18），可用 125（预算 117）
+        val misansShort = nats(21, 18, 19, 18, firstLines = 1, secondLines = 1)
+        // 满/满 = 73+69=142 > 117 → 紧凑/紧凑 = 53+51=104 ≤ 117
+        assertEquals(
+            COMPACT to COMPACT,
+            WidgetSchedule.nextClassRowPair(125, misansShort),
+        )
+        // 2×3 空间充裕 → 满/满（双节满档契约：AllPhone 保证在 2×3 兑现）
+        assertEquals(
+            STACKED to STACKED,
+            WidgetSchedule.nextClassRowPair(210, misansShort),
+        )
+        // 高度读不到 → 画满（两行都满档竖排，自然高，不裁）
+        assertEquals(
+            STACKED to STACKED,
+            WidgetSchedule.nextClassRowPair(0, misansShort),
+        )
+    }
+
+    @Test
+    fun `2×2 阶梯全域扫描_任何画布与字体度量组合都不丢行不溢出`() {
+        // 沿用六轮的字号/自然高构造做全域压力测试（判档契约与渲染层口径解耦）。
+        // 把"能不能适配不同机型"写成可执行的证明：画布（真实剪裁后）100..260dp ×
+        // 字体度量比 1.05..1.45（Roboto≈1.16 到 MiSans≈1.36，两侧行都多留余量），
+        // 每个组合断言三条不变量：
+        //   ① 两行都有（永远不蒸发）——枚举层面已保证，这里钉成回归；
+        //   ② 选中的两行自然高之和 ≤ 可用（不溢出画布；极矮+极粗字体的物理不可能区除外）；
+        //   ③ 可用高度越大，档位越高（单调），不会"变大反而藏内容"。
+        fun lineH(sizeDp: Int, bold: Boolean, ratio: Double): Int =
+            ceil(sizeDp.toDouble() * ratio * if (bold) 1.06 else 1.0).toInt()
+        fun natsFor(ratio: Double, firstLines: Int, secondLines: Int) =
+            WidgetSchedule.NextClassRowNaturals(
+                firstStacked = firstLines * lineH(15, true, ratio) + (2 + lineH(13, false, ratio)) * 2 + 12,
+                firstCompact = lineH(15, true, ratio) + 2 + lineH(13, false, ratio) + 12,
+                firstMini = maxOf(lineH(15, true, ratio), lineH(13, false, ratio)) + 12,
+                secondStacked = secondLines * lineH(13, true, ratio) + (2 + lineH(12, false, ratio)) * 2 + 12,
+                secondCompact = lineH(13, true, ratio) + 2 + lineH(12, false, ratio) + 12,
+                secondMini = maxOf(lineH(13, true, ratio), lineH(12, false, ratio)) + 12,
+            )
+        fun rank(s: NextClassPreviewStyle): Int = when (s) {
+            STACKED -> 4
+            COMPACT -> 2
+            MINI -> 1
+        }
+        var checked = 0
+        for (canvas in 100..260 step 2) {
+            var ratio = 1.05
+            while (ratio <= 1.451) {
+                // chrome 实测口径 = 内边距 20 + 表头(12 粗体) + 行距 2
+                val avail = (canvas - 20 - lineH(12, true, ratio) - 2).coerceAtLeast(0)
+                val n = natsFor(ratio, firstLines = 1, secondLines = if (canvas % 4 == 0) 2 else 1)
+                val (f, s) = WidgetSchedule.nextClassRowPair(avail, n)
+                // ① 两行都存在（MINI 是地板，任何组合都不会更小）
+                assertTrue("两行必须都有: canvas=$canvas ratio=$ratio", f == STACKED || f == COMPACT || f == MINI)
+                assertTrue("两行必须都有: canvas=$canvas ratio=$ratio", s == STACKED || s == COMPACT || s == MINI)
+                val sum = WidgetSchedule.nextClassRowNatDp(n, f, first = true) +
+                    WidgetSchedule.nextClassRowNatDp(n, s, first = false)
+                // ② 选中的形态总高不超过可用（minResizeHeight=110 以上的合法画布；
+                //    百分之九十物理不可能的极端区（<110 且 ratio 贴上限）只要求不丢行）
+                if (avail >= 78) {
+                    assertTrue(
+                        "选中形态溢出: canvas=$canvas ratio=$ratio sum=$sum avail=$avail",
+                        sum <= avail,
+                    )
+                }
+                // ③ 单调性：可用每 +10，档位不降
+                val (f2, s2) = WidgetSchedule.nextClassRowPair(avail + 10, n)
+                assertTrue(
+                    "档位应单调不降: canvas=$canvas ratio=$ratio",
+                    rank(f) + rank(s) <= rank(f2) + rank(s2) + 2, // 允许一档锯齿（S→C 之间跨档）
+                )
+                checked++
+                ratio += 0.05
+            }
+        }
+        // 网格非空（防手滑把循环删了测试变成空断言）
+        assertTrue(checked > 500)
+    }
+
+    @Test
+    fun `2×2 矮盒子先收地点_课名永远留着`() {
+        assertEquals(WidgetSchedule.RowDetail.FULL, WidgetSchedule.nextClassDetail(195))
+        assertEquals(WidgetSchedule.RowDetail.FULL, WidgetSchedule.nextClassDetail(78))
+        assertEquals(WidgetSchedule.RowDetail.NAME, WidgetSchedule.nextClassDetail(77))
+        assertEquals(WidgetSchedule.RowDetail.FULL, WidgetSchedule.nextClassDetail(0))
+    }
+
+    @Test
+    fun `2×2 假期标记单独给_不靠文案去猜`() {
+        val p = nextClass(week = null, today = listOf(course(600, 645)), nowMin = 600)
+        assertTrue(p.isVacation)
+        assertEquals("假期中", p.statusTitle)
+        assertEquals("期待新学期", p.statusMessage)
+    }
+
+    @Test
+    fun `2×2 还没同步课表时也给状态`() {
+        val p = nextClass(hasSchedule = false, week = null, today = emptyList(), nowMin = 600)
+        assertEquals("还没有课表数据", p.statusTitle)
+        assertTrue(!p.isVacation)
+    }
+
+    // ── 版式容量（实测画布 342×195 / 163×195） ──────────────────────────
+
+    @Test
+    fun `4×2 每列两行`() {
+        // 实测修正后画布 165dp → 2 行（195dp 是系统多报的值，见 Widgets.sizeDp）
+        assertEquals(2, WidgetSchedule.columnRows(165))
+        assertEquals(1, WidgetSchedule.columnRows(110))   // 老公式那种小盒子只放得下一行
+        assertEquals(5, WidgetSchedule.columnRows(400))   // 拉很大也有上限
+        assertEquals(2, WidgetSchedule.columnRows(0))     // 读不到尺寸时按实测值
+    }
+
+    @Test
+    fun `课名换行估算_CJK按整字_ASCII按半字`() {
+        // 单列实测约 148dp，可用文字宽 ≈ 137dp；14 个汉字 12dp 字号 ≈ 168dp → 两行
+        assertEquals(2, WidgetSchedule.nameLineCount("大学生职业生涯规划与就业指导", 148))
+        // 4 个汉字 ≈ 48dp → 一行
+        assertEquals(1, WidgetSchedule.nameLineCount("编译原理", 148))
+        // 列宽未知按一行（旧口径兜底）
+        assertEquals(1, WidgetSchedule.nameLineCount("大学生职业生涯规划与就业指导", 0))
+        // 纯 ASCII（实验课英文名）按 0.55em
+        assertEquals(1, WidgetSchedule.nameLineCount("College English", 148))
+    }
+
+    @Test
+    fun `行自然高随课名行数抬高`() {
+        assertEquals(44, WidgetSchedule.rowNaturalHeightDp(1))
+        assertEquals(60, WidgetSchedule.rowNaturalHeightDp(2))
+    }
+
+    @Test
+    fun `165dp 画布两行课都装得下_含两行课名`() {
+        // 2026-11-01 的修复目标：一节单行课名(44) + 一节两行课名(60) + 分隔线 1
+        // = 105 ≤ 可用 165-58(账本固定开销，卡片内边距已省到 10dp) = 107 → 两行都显示
+        assertEquals(2, WidgetSchedule.visibleRowCount(165, listOf(44, 60)))
+        // 真装不下的矮盒子才少画：110dp 可用 52，第二行 60 放不下 → 只画第一行
+        assertEquals(1, WidgetSchedule.visibleRowCount(110, listOf(44, 60)))
+        // 至少画一行
+        assertEquals(1, WidgetSchedule.visibleRowCount(60, listOf(44, 44)))
+        // 不知道高度时不裁（旧口径）
+        assertEquals(2, WidgetSchedule.visibleRowCount(0, listOf(44, 44)))
+    }
+
+    @Test
+    fun `剩余空间按行均摊_且永不低于自然高`() {
+        // 165dp 两行单行课名：可用 107，需要 44+44+1=89 → 剩 18 → 每行 +9
+        assertEquals(listOf(53, 53), WidgetSchedule.rowStretchTargetsDp(165, listOf(44, 44)))
+        // 大盒子里只温和撑（+12 封顶）
+        assertEquals(listOf(56, 56), WidgetSchedule.rowStretchTargetsDp(195, listOf(44, 44)))
+        // 有两行课名的行：需要 44+60+1=105，剩 2 → 每行 +1
+        assertEquals(listOf(45, 61), WidgetSchedule.rowStretchTargetsDp(165, listOf(44, 60)))
+        // 不知道高度时不撑
+        assertEquals(listOf(0, 0), WidgetSchedule.rowStretchTargetsDp(0, listOf(44, 44)))
+    }
+
+    @Test
+    fun `4×2 换行感知装柜_两节课都显示且不被裁`() {
+        // 场景复刻 2026-11-01 的截图：明天两节课，第二节课名 14 字（两行）。
+        // 修复后（卡片内边距 10 + 行内边距 5）账本判定两行都装得下 → 都显示。
+        val tomorrow = listOf(
+            course(480, 525, "编译原理", "南4 103"),
+            course(600, 645, "大学生职业生涯规划与就业指导", "北1 103"),
+        )
+        val p = WidgetSchedule.twoDayPlan(
+            hasSchedule = true,
+            week = 8,
+            todayDate = monday,
+            tomorrowDate = tuesday,
+            today = emptyList(),
+            tomorrow = tomorrow,
+            nowMin = 400,
+            maxRows = 2,
+            columnWidthDp = 148,
+            columnHeightDp = 165,
+        )
+        assertEquals(2, p.tomorrow.rows.size)
+        assertEquals(listOf("编译原理", "大学生职业生涯规划与就业指导"), p.tomorrow.rows.map { it.course.name })
+        assertEquals("共有 2 节", p.tomorrow.footer)
+        // 真正装不下（更矮的盒子）才退回少画一行，且 footer 不隐瞒总数
+        val tight = WidgetSchedule.twoDayPlan(
+            hasSchedule = true,
+            week = 8,
+            todayDate = monday,
+            tomorrowDate = tuesday,
+            today = emptyList(),
+            tomorrow = tomorrow,
+            nowMin = 400,
+            maxRows = 2,
+            columnWidthDp = 148,
+            columnHeightDp = 110,
+        )
+        assertEquals(1, tight.tomorrow.rows.size)
+        assertEquals("共有 2 节", tight.tomorrow.footer)
+    }
+
+    @Test
+    fun `字号按画布高度分档`() {
+        // 标准档（实测 4×2 高 195dp；读不到尺寸按标准）
+        assertEquals(13 to 12, WidgetSchedule.rowFontSizes(195))
+        assertEquals(13 to 12, WidgetSchedule.rowFontSizes(0))
+        // 矮盒子（别的启动器 4×2 槽位更矮）用紧凑档防裁字
+        assertEquals(12 to 11, WidgetSchedule.rowFontSizes(160))
+    }
+
+    @Test
+    fun `电量块高把两半铺开_也留余量`() {
+        // 195dp：可用 = 195-57-10 = 128 → 每块 64 → 封顶 67
+        assertEquals(67, WidgetSchedule.blockHeightDp(195))
+        // 盒子很矮时也至少给 48dp（不然数字会被挤扁）
+        assertEquals(48, WidgetSchedule.blockHeightDp(100))
+        // 不知道盒子多大时不撑
+        assertEquals(0, WidgetSchedule.blockHeightDp(0))
+    }
+
+    @Test
+    fun `窄到一定程度就不显示地点`() {
+        assertEquals(WidgetSchedule.RowDetail.FULL, WidgetSchedule.rowDetail(148))
+        assertEquals(WidgetSchedule.RowDetail.FULL, WidgetSchedule.rowDetail(120))
+        assertEquals(WidgetSchedule.RowDetail.NAME, WidgetSchedule.rowDetail(119))
+        assertEquals(WidgetSchedule.RowDetail.FULL, WidgetSchedule.rowDetail(0))
+    }
+
+    // ── 课程边界闹钟 ─────────────────────────────────────────────────────
+
+    @Test
+    fun `下一个边界取最近的上课或下课时刻`() {
+        val today = listOf(course(600, 645), course(665, 710))
+        val now = 1_000_000L
+        assertEquals(now + 35 * 60_000L, WidgetSchedule.nextBoundaryMillis(today, 610, now))
+        assertEquals(now + 15 * 60_000L, WidgetSchedule.nextBoundaryMillis(today, 650, now))
+    }
+
+    @Test
+    fun `今天没有边界了就返回 null_交给系统的定时刷新`() {
+        assertNull(WidgetSchedule.nextBoundaryMillis(listOf(course(600, 645)), 700, 1L))
+        assertNull(WidgetSchedule.nextBoundaryMillis(emptyList(), 600, 1L))
+    }
+
+    @Test
+    fun `异常作息不会定出很远的闹钟`() {
+        val at = WidgetSchedule.nextBoundaryMillis(listOf(course(23 * 60, 23 * 60 + 45)), 60, 0L)
+        assertEquals(6 * 60 * 60_000L, at)
+    }
+
+
+    // ── 4×5 周课表（恒显 7 列、两行列头、周末明细条只补有课日） ──────────
+
+    /** 带节次的课（周课表按 startUnit 对齐） */
+    private fun unitCourse(
+        startUnit: Int,
+        endUnit: Int,
+        name: String = "课",
+        code: String = "C1",
+    ) = WidgetCourse(
+        code = code, name = name, place = "南2 206",
+        startMin = 480 + startUnit * 60, endMin = 480 + endUnit * 60,
+        startUnit = startUnit, endUnit = endUnit,
+    )
+
+    private val wednesday = java.time.LocalDate.of(2026, 11, 4)   // 周三
+
+    @Test
+    fun `周课表_恒显七列_两行列头_今天高亮`() {
+        val plan = WidgetSchedule.weekPlan(
+            hasSchedule = true,
+            week = 8,
+            coursesByDay = mapOf(
+                1 to listOf(unitCourse(1, 2)),
+                3 to listOf(unitCourse(3, 4)),
+            ),
+            today = wednesday,
+        )
+        // 用户最终拍板：恒显 7 列，周末空格子本身就是"没课"的答案
+        assertEquals(7, plan.columns.size)
+        assertEquals(listOf("一", "二", "今", "四", "五", "六", "日"), plan.columns.map { it.dayChar })
+        assertEquals(
+            listOf("11.2", "11.3", "11.4", "11.5", "11.6", "11.7", "11.8"),
+            plan.columns.map { it.dateText },
+        )
+        assertTrue(plan.columns[2].isToday)
+        assertFalse(plan.columns[0].isToday)
+        // 周末没课 → 明细条不出现（行高预算因此更宽裕）
+        assertEquals(0, plan.weekendLines.size)
+        assertEquals("第 8 周", plan.week)
+    }
+
+    @Test
+    fun `周课表_周末有课时明细条补全完整时间段`() {
+        val saturday = java.time.LocalDate.of(2026, 11, 7)
+        val plan = WidgetSchedule.weekPlan(
+            hasSchedule = true,
+            week = 9,
+            coursesByDay = mapOf(
+                1 to listOf(unitCourse(1, 2)),
+                6 to listOf(unitCourse(3, 4, "调休课")),
+            ),
+            today = saturday,
+        )
+        // 网格 7 列都在；周六列今天高亮、课进格子
+        assertEquals(7, plan.columns.size)
+        assertEquals("今", plan.columns[5].dayChar)
+        assertEquals("调休课", plan.columns[5].cells[1]?.name)
+        // 明细条只出有课的那天：完整时间段在这补全（窄格只显开始时刻）
+        assertEquals(1, plan.weekendLines.size)
+        assertTrue(plan.weekendLines[0].text.startsWith("六 11.7 调休课 南2 206"))
+        assertTrue(plan.weekendLines[0].hasCourse)
+        assertTrue(plan.weekendLines[0].isToday)
+    }
+
+    @Test
+    fun `周课表_节次槽按本周实际出现的起始节次收敛`() {
+        val plan = WidgetSchedule.weekPlan(
+            hasSchedule = true,
+            week = 8,
+            // 1-2 和 3-4 两个大节 → 全周只有 2 个槽（5/6/7…节没课不浪费行高）
+            coursesByDay = mapOf(
+                1 to listOf(unitCourse(1, 2, "上午课")),
+                2 to listOf(unitCourse(3, 4, "下午课")),
+            ),
+            today = wednesday,
+        )
+        assertEquals(2, plan.slotCount)
+        val monday = plan.columns[0].cells
+        assertEquals("上午课", monday[0]?.name)
+        assertEquals(1, monday[0]?.slotSpan)     // 1-2 只覆盖槽 1
+        assertNull(monday[1])                     // 周一第 2 槽（3 节）没课
+        val tuesday = plan.columns[1].cells
+        assertNull(tuesday[0])                    // 周二第 1 槽（1 节）没课
+        assertEquals("下午课", tuesday[1]?.name)
+        assertEquals(1, tuesday[1]?.slotSpan)     // 3-4 只覆盖槽 3
+    }
+
+    @Test
+    fun `周课表_跨节的课占多行_被盖住的槽留空`() {
+        val plan = WidgetSchedule.weekPlan(
+            hasSchedule = true,
+            week = 8,
+            coursesByDay = mapOf(
+                // 1-4 连上；另一天 3-4 和 5-6
+                1 to listOf(unitCourse(1, 4, "连堂课")),
+                2 to listOf(unitCourse(3, 4), unitCourse(5, 6)),
+            ),
+            today = wednesday,
+        )
+        // 槽 = [1, 3, 5]
+        assertEquals(3, plan.slotCount)
+        val monday = plan.columns[0].cells
+        assertEquals("连堂课", monday[0]?.name)
+        assertEquals(2, monday[0]?.slotSpan)   // 1-4 覆盖槽 1、3（5 节不在范围内）
+        assertNull(monday[1])                   // 被连堂格覆盖
+        assertNull(monday[2])                   // 5 节的槽空着
+        val tuesday = plan.columns[1].cells
+        assertNull(tuesday[0])
+        assertEquals(1, tuesday[1]?.slotSpan)   // 3-4 占槽 3 一格
+        assertEquals(1, tuesday[2]?.slotSpan)   // 5-6 占槽 5 一格
+    }
+
+    @Test
+    fun `周课表_同列同槽撞车先到先得`() {
+        val plan = WidgetSchedule.weekPlan(
+            hasSchedule = true,
+            week = 8,
+            coursesByDay = mapOf(
+                1 to listOf(unitCourse(1, 2, "先到的课", "A"), unitCourse(1, 2, "后到的课", "B")),
+            ),
+            today = wednesday,
+        )
+        assertEquals("先到的课", plan.columns[0].cells[0]?.name)
+    }
+
+    @Test
+    fun `周课表_未同步与假期走整块状态`() {
+        val p1 = WidgetSchedule.weekPlan(hasSchedule = false, week = 8, coursesByDay = emptyMap(), today = wednesday)
+        assertEquals("还没有课表数据", p1.overlayTitle)
+        val p2 = WidgetSchedule.weekPlan(hasSchedule = true, week = null, coursesByDay = emptyMap(), today = wednesday)
+        assertEquals("假期中", p2.overlayTitle)
+        assertTrue(p2.hasOverlay)
+    }
+
+    @Test
+    fun `周课表_行高与可见性分档`() {
+        // 4×5 实测 ~443dp、5 槽、无周末条：(443-62)/5 = 76dp
+        assertEquals(76, WidgetSchedule.weekRowHeightDp(443, 5))
+        // 周末明细条出现时：443-62-36 = 345 → 每行 69dp
+        assertEquals(69, WidgetSchedule.weekRowHeightDp(443, 5, 62 + WidgetSchedule.WEEKEND_STRIP_EXTRA_DP))
+        // 上限 120
+        assertEquals(120, WidgetSchedule.weekRowHeightDp(900, 2))
+        // 不知道尺寸按 0（渲染走自然高）
+        assertEquals(0, WidgetSchedule.weekRowHeightDp(0, 5))
+        // 7 列单列 43dp → 9dp 字号
+        assertEquals(9, WidgetSchedule.weekNameSizeDp(43))
+        // 43dp 行高 76：课名(≤3行) + 地点 + 开始时刻 全显示（信息齐全的关键）
+        assertTrue(WidgetSchedule.weekShowPlace(43, 76))
+        assertTrue(WidgetSchedule.weekShowTime(43, 76))
+        assertTrue(WidgetSchedule.weekTimeIsShort(43))
+        // 行高不够时先隐地点再隐时间
+        assertFalse(WidgetSchedule.weekShowPlace(43, 60))
+        assertFalse(WidgetSchedule.weekShowTime(43, 50))
+        // 名字行数：76dp 高、扣掉地点时间后 3 行封顶；矮行 1 行
+        assertEquals(3, WidgetSchedule.weekNameMaxLines(43, 76))
+        assertEquals(1, WidgetSchedule.weekNameMaxLines(43, 30))
+    }
+
+    @Test
+    fun `时间显示可在时刻与节次之间切换`() {
+        fun course(timeAsPeriod: Boolean) = WidgetCourse(
+            code = "C", name = "编译原理", place = "南4 103",
+            startMin = 610, endMin = 710, startUnit = 3, endUnit = 4,
+            timeAsPeriod = timeAsPeriod,
+        )
+        // 默认（false）= 时刻，与拾光口径一致
+        assertEquals("10:10-11:50", course(false).timeText)
+        assertEquals("10:10-11:50", course(false).rangeText)
+        // 开启 = 节次
+        assertEquals("第3-4节", course(true).timeText)
+        // 节次未知（0）退回时刻，不出「第0-0节」
+        assertEquals("10:10-11:50", course(true).copy(startUnit = 0).timeText)
+    }
+
+    @Test
+    fun `行样式偏好_强制三行放得下才生效_放不下回退阶梯`() {
+        // 放得下：强制三行生效（哪怕阶梯本来判得更高/更低）
+        val fits = WidgetSchedule.NextClassRowNaturals(
+            firstStacked = 66, firstCompact = 52, firstMini = 30,
+            secondStacked = 62, secondCompact = 47, secondMini = 28,
+        )
+        assertEquals(COMPACT to COMPACT, WidgetSchedule.nextClassRowPair(127, fits, WidgetSchedule.ROW_MODE_COMPACT))
+        // 强制档缓冲 2dp：106dp → 预算 104 ≥ 52+47=99 → 生效（2026-11-11 用户实测三档同形后收紧）
+        assertEquals(COMPACT to COMPACT, WidgetSchedule.nextClassRowPair(106, fits, WidgetSchedule.ROW_MODE_COMPACT))
+        // 真放不下（预算 98 < 99）：回退阶梯
+        val (f, s) = WidgetSchedule.nextClassRowPair(100, fits, WidgetSchedule.ROW_MODE_COMPACT)
+        assertTrue("$f/$s", (f to s) != (COMPACT to COMPACT))
+        // 自动档不受影响
+        assertEquals(WidgetSchedule.nextClassRowPair(127, fits), WidgetSchedule.nextClassRowPair(127, fits, WidgetSchedule.ROW_MODE_AUTO))
+    }
+
+    @Test
+    fun `行样式偏好_强制单行恒生效_任何画布都不溢出`() {
+        val n = WidgetSchedule.NextClassRowNaturals(
+            firstStacked = 90, firstCompact = 70, firstMini = 30,
+            secondStacked = 86, secondCompact = 66, secondMini = 28,
+        )
+        // 高画布：强制单行也生效（用户要的就是省高度）
+        assertEquals(MINI to MINI, WidgetSchedule.nextClassRowPair(300, n, WidgetSchedule.ROW_MODE_MINI))
+        // 读不到尺寸：单行偏好同样恒生效（画满分支只属于 auto）
+        assertEquals(MINI to MINI, WidgetSchedule.nextClassRowPair(0, n, WidgetSchedule.ROW_MODE_MINI))
+        // auto 读不到尺寸 = 画满（STACKED）
+        assertEquals(STACKED to STACKED, WidgetSchedule.nextClassRowPair(0, n, WidgetSchedule.ROW_MODE_AUTO))
+    }
+
+    @Test
+    fun `地点与时间段可整体隐藏_数据原样保留`() {
+        val c = WidgetCourse(
+            code = "C", name = "编译原理", place = "南4 103",
+            startMin = 610, endMin = 710, startUnit = 3, endUnit = 4,
+        )
+        // 默认全显示
+        assertEquals("南4 103", WidgetSchedule.toRow(c).place)
+        assertEquals("10:10-11:50", WidgetSchedule.toRow(c).timeRange)
+        // 隐藏地点：行里空串，course.place 原样
+        assertTrue(WidgetSchedule.toRow(c.copy(hidePlace = true)).place.isEmpty())
+        assertEquals("南4 103", c.copy(hidePlace = true).place)
+        // 隐藏时间：timeText 空串
+        assertTrue(c.copy(hideTime = true).timeText.isEmpty())
+        // 组合：节次 + 隐藏地点
+        val both = c.copy(timeAsPeriod = true, hidePlace = true)
+        assertEquals("第3-4节", both.timeText)
+        assertTrue(WidgetSchedule.toRow(both).place.isEmpty())
+    }
+
+    @Test
+    fun `周末明细条可整体关闭`() {
+        val monday = java.time.LocalDate.of(2026, 11, 9)
+        val sat = WidgetCourse(code = "C", name = "补课", place = "南1 203", startMin = 480, endMin = 525)
+        val byDay = mapOf(6 to listOf(sat))
+        val withStrip = WidgetSchedule.weekPlan(
+            hasSchedule = true, week = 10, coursesByDay = byDay, today = monday,
+        )
+        assertTrue(withStrip.weekendLines.isNotEmpty())
+        val withoutStrip = WidgetSchedule.weekPlan(
+            hasSchedule = true, week = 10, coursesByDay = byDay, today = monday,
+            showWeekendStrip = false,
+        )
+        assertTrue(withoutStrip.weekendLines.isEmpty())
+    }
+
+    @Test
+    fun `行样式偏好_强制满档_放得下才生效`() {
+        // 165dp 画布口径：stacked 66+62=128 > 预算 119 → 回退阶梯（紧凑三行）
+        val tall = WidgetSchedule.NextClassRowNaturals(
+            firstStacked = 66, firstCompact = 52, firstMini = 30,
+            secondStacked = 62, secondCompact = 47, secondMini = 28,
+        )
+        val (f1, s1) = WidgetSchedule.nextClassRowPair(127, tall, WidgetSchedule.ROW_MODE_STACKED)
+        assertTrue("高画布也应受限检查: $f1/$s1", (f1 to s1) == (COMPACT to COMPACT))
+        // 更宽的画布：stacked 放得下 → 满档生效
+        val (f2, s2) = WidgetSchedule.nextClassRowPair(200, tall, WidgetSchedule.ROW_MODE_STACKED)
+        assertEquals(STACKED to STACKED, f2 to s2)
+    }
+
+    @Test
+    fun `明日预告表头用明天的周次`() {
+        val tomorrowCourses = listOf(
+            WidgetCourse(code = "C", name = "职业生涯规划", place = "北1 108", startMin = 840, endMin = 940),
+        )
+        // 周日跨周：今天第 9 周，明天第 10 周 → 表头应跟明天的课走
+        val plan = WidgetSchedule.nextClassPlan(
+            hasSchedule = true, week = 9,
+            today = emptyList(), tomorrow = tomorrowCourses, nowMin = 1200,
+            tomorrowWeek = 10,
+        )
+        assertEquals("明日预告 · 第 10 周", plan.header)
+        // 不传 tomorrowWeek（旧调用点）保持今天的周次
+        val planLegacy = WidgetSchedule.nextClassPlan(
+            hasSchedule = true, week = 9,
+            today = emptyList(), tomorrow = tomorrowCourses, nowMin = 1200,
+        )
+        assertEquals("明日预告 · 第 9 周", planLegacy.header)
+    }
+
+    @Test
+    fun `4x2 行样式进计划_竖排自然高更高`() {
+        val courses = listOf(
+            WidgetCourse(code = "C", name = "编译原理", place = "南4 103", startMin = 610, endMin = 710),
+        )
+        val base = mapOf(
+            "todayDate" to java.time.LocalDate.of(2026, 11, 11),
+        )
+        fun plan(style: String) = WidgetSchedule.twoDayPlan(
+            hasSchedule = true, week = 10,
+            todayDate = base.getValue("todayDate"),
+            tomorrowDate = base.getValue("todayDate").plusDays(1),
+            today = courses, tomorrow = courses, nowMin = 1200,
+            rowStyle = style,
+        )
+        assertEquals(WidgetSchedule.ROW_MODE_AUTO, plan(WidgetSchedule.ROW_MODE_AUTO).rowStyle)
+        assertEquals(WidgetSchedule.ROW_MODE_STACKED, plan(WidgetSchedule.ROW_MODE_STACKED).rowStyle)
+        assertTrue(plan(WidgetSchedule.ROW_MODE_STACKED).stackedRows)
+        assertTrue(plan(WidgetSchedule.ROW_MODE_MINI).miniRows)
+        // 竖排的自然高 = 标准 + 一行小字（16dp）
+        val lines = WidgetSchedule.nameLineCount("编译原理", 150, 13)
+        assertEquals(
+            WidgetSchedule.rowNaturalHeightDp(lines) + WidgetSchedule.NAME_LINE_EXTRA_DP,
+            WidgetSchedule.twoDayRowNaturalHeightDp(lines, WidgetSchedule.ROW_MODE_STACKED),
+        )
+        assertEquals(
+            WidgetSchedule.rowNaturalHeightDp(lines),
+            WidgetSchedule.twoDayRowNaturalHeightDp(lines, WidgetSchedule.ROW_MODE_AUTO),
+        )
+    }
+
+    @Test
+    fun `强制满档在真实画布预算内生效`() {
+        // Meizu 165dp 实测口径：满档自然高 ~63+60=123dp，可用 127dp。
+        // 旧预算（−8）判放不下 → 静默回退紧凑，「满档」成空操作；
+        // 强制档缓冲 2dp → 123 ≤ 125 生效。
+        val n = WidgetSchedule.NextClassRowNaturals(
+            firstStacked = 63, firstCompact = 52, firstMini = 30,
+            secondStacked = 60, secondCompact = 47, secondMini = 28,
+        )
+        assertEquals(
+            STACKED to STACKED,
+            WidgetSchedule.nextClassRowPair(127, n, WidgetSchedule.ROW_MODE_STACKED),
+        )
+        // 紧凑三行同样在强制预算下生效
+        assertEquals(
+            COMPACT to COMPACT,
+            WidgetSchedule.nextClassRowPair(127, n, WidgetSchedule.ROW_MODE_COMPACT),
+        )
+    }
+    // ── PR #18 八轮/九轮：字号档回退链 / 地点下限 11dp / 间距摊余 ──────────
+
+    /** MiSans 真机实测行高阶梯（480dpi：行高 = 字号×1.35 左右，取整） */
+    private val misans = mapOf(9 to 14, 10 to 15, 11 to 15, 12 to 17, 13 to 18, 14 to 19, 15 to 21)
+
+    private fun tierNaturals(
+        t: WidgetSchedule.CompactFontTier,
+        heights: Map<Int, Int>,
+    ): WidgetSchedule.NextClassRowNaturals {
+        fun lh(size: Int) = heights.getValue(size)
+        fun stackedNat(lines: Int, lhN: Int, lhP: Int, lhT: Int): Int =
+            lines * lhN + (2 + lhP) + (2 + lhT) + 10 + 2
+        fun compactNat(lhN: Int, lhP: Int, lhT: Int): Int =
+            lhN + lhP + lhT + WidgetSchedule.NEXT_CLASS_TRIPLE_PAD_DP * 2 + 1
+        fun miniNat(lhN: Int, lhT: Int): Int = maxOf(lhN, lhT) + 10 + 2
+        return WidgetSchedule.NextClassRowNaturals(
+            firstStacked = stackedNat(1, lh(t.n1), lh(t.p1), lh(t.t1)),
+            firstCompact = compactNat(lh(t.n1), lh(t.p1), lh(t.t1)),
+            firstMini = miniNat(lh(t.n1), lh(t.t1)),
+            secondStacked = stackedNat(1, lh(t.n2), lh(t.p2), lh(t.t2)),
+            secondCompact = compactNat(lh(t.n2), lh(t.p2), lh(t.t2)),
+            secondMini = miniNat(lh(t.n2), lh(t.t2)),
+        )
+    }
+
+    @Test
+    fun `地点恒一行_从13缩到11再裁左边保留教室号`() {
+        // "环保馆 405"（宽 11 字符单位）在 10dp 宽度里：13/12/11 都放不下 → 裁左保房号
+        val fit = WidgetSchedule.fitPlaceText(
+            place = "环保馆 405",
+            usableWidthDp = 40,
+            maxSizeDp = 13,
+            minSizeDp = WidgetSchedule.NEXT_CLASS_PLACE_MIN_DP,
+        )
+        assertEquals(WidgetSchedule.NEXT_CLASS_PLACE_MIN_DP, fit.sizeDp)
+        assertTrue(fit.text.startsWith("…"))
+        assertTrue(fit.text.endsWith("405"))
+    }
+
+    @Test
+    fun `地点放得下时保持原文本与最大字号`() {
+        val fit = WidgetSchedule.fitPlaceText(
+            place = "北2 404",
+            usableWidthDp = 60,
+            maxSizeDp = 13,
+            minSizeDp = WidgetSchedule.NEXT_CLASS_PLACE_MIN_DP,
+        )
+        assertEquals("北2 404", fit.text)
+        assertEquals(13, fit.sizeDp)
+    }
+
+    @Test
+    fun `2×2 字号档位按实测行高选档_地点永不因放大字号被砍`() {
+        // 真机 147dp 可用（157×147 上报画布、chrome 22）：大字档放不下 → 回退到能放的档
+        val avail = 125
+        fun bigFont(t: WidgetSchedule.CompactFontTier) = tierNaturals(t, misans)
+        val tier = WidgetSchedule.chooseCompactTier(avail) { bigFont(it) }
+        // 回退链有测试兜底：选中的档两行都不掉 MINI
+        val nat = bigFont(tier)
+        val pair = WidgetSchedule.nextClassRowPair(avail, nat)
+        assertTrue(pair.first != WidgetSchedule.NextClassPreviewStyle.MINI)
+        assertTrue(pair.second != WidgetSchedule.NextClassPreviewStyle.MINI)
+        // 大画布上大字档直接可用
+        val natBig = bigFont(WidgetSchedule.NEXT_CLASS_COMPACT_TIERS.first())
+        val pairBig = WidgetSchedule.nextClassRowPair(200, natBig)
+        assertTrue(pairBig.first != WidgetSchedule.NextClassPreviewStyle.MINI)
+        assertTrue(pairBig.second != WidgetSchedule.NextClassPreviewStyle.MINI)
+    }
+
+    @Test
+    fun `2×2 行距与课间隔折算成padding_不触碰判档账本`() {
+        val nat1 = 50
+        val nat2 = 45
+        val (spaced1, spaced2) = WidgetSchedule.nextClassSpacedRowsDp(
+            availDp = 160,
+            nat1 = nat1,
+            nat2 = nat2,
+            compact1 = true,
+            compact2 = true,
+        )
+        // 目标高 ≥ 内容自然高（行距已含在内容里），且总高不超过可用
+        assertTrue(spaced1.targetHeightDp >= spaced1.contentHeightDp)
+        assertTrue(spaced2.targetHeightDp >= spaced2.contentHeightDp)
+        assertTrue(spaced1.targetHeightDp + spaced2.targetHeightDp <= 160)
+        // 行高永不低于内容自然高
+        assertTrue(spaced1.targetHeightDp >= nat1)
+        assertTrue(spaced2.targetHeightDp >= nat2)
+    }
+
+    @Test
+    fun `字号档自动回退在极矮画布落最小档且课不蒸发`() {
+        val avail = 60
+        fun bigFont(t: WidgetSchedule.CompactFontTier) = tierNaturals(t, misans)
+        val tier = WidgetSchedule.chooseCompactTier(avail) { bigFont(it) }
+        assertEquals(WidgetSchedule.NEXT_CLASS_COMPACT_TIERS.last(), tier)
+        val nat = bigFont(tier)
+        val pair = WidgetSchedule.nextClassRowPair(avail, nat)
+        // 极矮画布：两节课以最低档（MINI）存在——课不蒸发即是正确行为
+        assertTrue(pair.first == WidgetSchedule.NextClassPreviewStyle.MINI)
+        assertTrue(pair.second == WidgetSchedule.NextClassPreviewStyle.MINI)
+    }
+
+    @Test
+    fun `第10和11节在节次模式下显示节次而非退回时刻`() {
+        // 回归：periodText 旧判断 startUnit in 1..9，第 10/11 节会错误回退成时刻文本
+        val c10 = course(0, 0).copy(startUnit = 10, endUnit = 10, timeAsPeriod = true)
+        val c11 = course(0, 0).copy(startUnit = 11, endUnit = 11, timeAsPeriod = true)
+        assertEquals("第10-10节", c10.periodText)
+        assertEquals("第11-11节", c11.periodText)
+    }
+
+}

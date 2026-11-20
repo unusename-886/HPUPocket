@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「2×2」课表组件的实际布局（**真实画布实测 163×195dp**）。
+  它只回答一个问题：**我下一节是什么**。
+
+  ┌──────────────────────────────┐
+  │ 今天 · 第 4 周               │ ← 表头
+  │ ▌大学物理                    │ ← 本节行 = 紧凑三行（课名 / 地点 /
+  │   南3 101                    │    时间段各占一行，地点恒单行）
+  │   10:00-11:35                │    13/11，字号大一号
+  │ ▌程序设计基础                 │ ← 第二行 = 下一节（12/10）
+  │   南3 202                    │    地点过长 → 先缩字号到 9dp，
+  │   14:00-15:40                │    仍放不下裁左边保留尾部教室号
+  └──────────────────────────────┘
+  档位（满档竖排 / 紧凑三行 / 单行一行式，**永不蒸发阶梯**）
+  由 nextClassRowPair 决定，高度读不到默认画满。
+
+  形态判定全在 `WidgetSchedule.nextClassPlan`（纯函数、有单测）：
+    1. 今天还有没下课的课 → 头两节排两行，表头「今天 · 第 N 周」；
+    2. 今天上完了 / 今天本来没课，但明天有 → 明天的头两节，表头「明日预告 · 第 N 周」；
+    3. 今明都没有 → `@id/container_status` 居中一句「无课程」。
+  假期 / 还没同步过课表 → 「假期中」「还没有课表数据」，同样走 container_status
+  （另外 `@id/container_overlay` 只给假期用：整块盖住，连表头一起换掉）。
+
+  ## 演化史（改这个文件前先读，别再折返）
+  · 中间版做成「星期表头 + 一行一节」的列表：真机上被否——空态只剩一句状态像坏了，
+    且把 4×2 的「明天的课看右边」文案带进了 2×2（2×2 没有右边）。
+  · 之后回退成「一节课大字 + 圆气泡 + 一行预告」；再后来预告升两行（#13 一轮）。
+  · **2026-11-04（#13 二轮，用户要求）**：两节都改用 4×2 的「色条 + 文字」行样式、
+    圆气泡删除（剩几节的信息 4×2 页脚已有）。行内容/行高/收档全在
+    NextClassWidget.build，别在这里写死行。
+  · **2026-11-05（#13 三/四轮，HyperOS 实证）**：行版式换成**竖排三行**；
+    行高改 Paint 实测（四轮）。rc2 实证：判档"收 0"档 + 门槛差 1dp =
+    第二节蒸发，于是
+  · **2026-11-06（#13 五轮）**：阶梯改**永不蒸发**（nextClassRowPair，HIDE 删除），
+    行高一律自然高 + padding 摊余（不再 setViewLayoutHeight——显式高度只要小于
+    内容就裁字，rc1 的病根）；判档带 8dp 缓冲。MINI 最低档 = 单行一行式
+    （widget_course_row_mini.xml），小到任何合法盒子都放得下。
+  · **2026-11-06（#13 七轮）**：紧凑档改**紧凑三行**（widget_course_row_triple.xml）：
+    课名 / 地点 / 时间段各一行，地点恒单行、过长先缩字号到 9dp 再裁左边保留尾部
+    教室号；课名收单行、字号降一档（13/11、12/10）、行内边距 2dp、行距 0 ——
+    两行合计约 90dp，150dp 画布也留出约 8dp 安全垫。满档竖排仍只给拉高的 2×3。
+  ⚠️ 但「别改成整周多行列表」仍成立：next_rows 只排到下一节为止。
+
+  ## 尺寸账（2×2；启动器报值不一，全部**渲染时实测**，不再写死）
+      chrome = 内边距 20（setViewPadding 10×2）+ 表头实测行高 + 行距 2；
+      可用 = 画布(SIZES 优先，MIN/MAX−30 兜底) − chrome；
+      阶梯：满/满 → 紧凑/紧凑 → 紧凑/单行 → 单行/单行（缓冲 8dp）；
+      紧凑三行自然高 = 课名1行 + 地点 + 时间段 + 内边距2+2 + 余量1；
+      余量按行分摊（仅 padding 展开，cap 12dp），行高永不低于各档自然高。
+
+  ## RemoteViews 的限制（改这个文件前先读）
+    · 只能用白名单控件（LinearLayout / FrameLayout / RelativeLayout / TextView / ImageView…），
+      `<View>`、`<Space>` 会被判 "Class not allowed to be inflated"；
+    · 行（widget_course_row）由渲染层 addView 进 @id/next_rows，**每次刷新前必须
+      removeAllViews 清场**，否则状态切换会残留上一态的行；
+    · 三种形态的可见性（card / overlay / status）同样**每次都要显式写一遍**。
+-->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:id="@+id/card"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_bg"
+        android:orientation="vertical"
+        android:padding="@dimen/widget_pad">
+
+        <!-- 表头行：左「今天 · 第 N 周」 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:baselineAligned="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/header"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_preview_next_header"
+                android:textColor="@color/widget_text"
+                android:textSize="@dimen/widget_col_header"
+                android:textStyle="bold" />
+
+            <!-- 右侧周几（紧凑表头风格用；经典风格下 GONE）。PR #18 -->
+            <TextView
+                android:id="@+id/header_weekday"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text=""
+                android:textColor="@color/widget_text"
+                android:textSize="@dimen/widget_col_header"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <RelativeLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="@dimen/widget_gap_xs"
+            android:layout_weight="1">
+
+            <!-- 两行课程（4×2 同款 courseRow）：由 NextClassWidget.build 渲染时 addView 进来 -->
+            <LinearLayout
+                android:id="@+id/next_rows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <!-- 状态态：无课程 / 假期中 / 还没有课表数据 -->
+            <LinearLayout
+                android:id="@+id/container_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_centerInParent="true"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/status_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:text="@string/widget_preview_no_course"
+                    android:textColor="@color/widget_text"
+                    android:textSize="@dimen/widget_status_title"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/status_message"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/widget_gap_xs"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:textColor="@color/widget_text_dim"
+                    android:textSize="@dimen/widget_status_msg"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </RelativeLayout>
+    </LinearLayout>
+
+    <!-- 假期：整块盖住（连表头一起换掉，与拾光一致） -->
+    <LinearLayout
+        android:id="@+id/container_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_bg"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="@dimen/widget_pad"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/overlay_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:text="@string/widget_preview_vacation"
+            android:textColor="@color/widget_text"
+            android:textSize="@dimen/widget_status_title"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/overlay_message"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/widget_gap"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:text="@string/widget_preview_vacation_msg"
+            android:textColor="@color/widget_text_dim"
+            android:textSize="@dimen/widget_status_msg" />
+    </LinearLayout>
+</RelativeLayout>

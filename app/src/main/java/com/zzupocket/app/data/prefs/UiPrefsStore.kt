@@ -1,0 +1,516 @@
+package com.zzupocket.app.data.prefs
+
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import com.zzupocket.app.core.WeekSettings
+import com.zzupocket.app.ui.widget.WidgetSchedule
+import com.zzupocket.app.core.WeekSource
+import com.zzupocket.app.core.WeekStartDay
+import java.time.LocalDate
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+
+/** 课程格里显示哪些内容（老师不在这里显示：点开课程详情能看到，格子太小放不下） */
+enum class CourseTextMode {
+    NAME,
+    NAME_ROOM,
+
+    /** 已废弃：早期版本允许在格子里显示老师，现在统一按「课名+地点」处理（读偏好时会自动降级） */
+    @Deprecated("课表格子不再显示老师")
+    NAME_TEACHER_ROOM,
+}
+
+/** 格子密度：影响行高与字号（9sp 太小，标准档提到 11sp） */
+enum class GridDensity { COMPACT, STANDARD, COMFORTABLE }
+
+/**
+ * 全应用字号缩放档位。
+ *
+ * [SYSTEM]（默认）= 跟随系统字体大小设置，不覆盖 `LocalDensity`；
+ * 其余档位是显式的 `fontScale` 倍率，在 MainActivity 的主题层覆盖 `LocalDensity`，
+ * 只放大 `sp` 文字、不动 dp 布局（与系统字号机制同款）。
+ * 用 `scale` 为 null 表示"不覆盖"，主题层据此决定是否介入。
+ */
+enum class AppFontScale(val scale: Float?) {
+    SYSTEM(null),
+    SMALL(0.85f),
+    STANDARD(1.0f),
+    LARGE(1.15f),
+    EXTRA_LARGE(1.3f),
+}
+
+/** 课程配色：多彩（按课程代码取色）/ 单色（统一用主题色） */
+enum class CourseColorMode { COLORFUL, SINGLE }
+
+/**
+ * 课程块描边。
+ *
+ * 虚线用于把相邻、颜色接近的课程块分开，避免"连成一片"看不出边界。
+ * 这里刻意把原来的「显示网格线」开关合并进来 —— 它本质就是同一种东西的实线形式。
+ */
+enum class BlockBorder { NONE, SOLID, DASHED }
+
+/** 深浅色：跟随系统 / 始终浅色 / 始终深色 */
+enum class DarkMode { SYSTEM, LIGHT, DARK }
+
+/**
+ * 深色对比度：标准 / 中 / 高。
+ *
+ * 对 Material 3 `contrastLevel` 三档的封装（对标 Android 系统设置里的「对比度」）：
+ * 同一套深色 scheme 在 0.0 / 0.5 / 1.0 下重算各角色值——高档把文字、容器、边线
+ * 整体推亮，专治「深色下整体发灰、糊在一块」。只在深色下生效，浅色不受影响。
+ */
+enum class DarkContrast { STANDARD, MEDIUM, HIGH }
+
+/**
+ * 全应用配色预设。
+ *
+ * [DYNAMIC] = 跟随系统壁纸的动态取色（最接近原生 Android 的默认观感）；
+ * 其余每一项都是**一个种子色**，由 Material 3 算法（HCT）算出整套浅/深配色，
+ * 所以颜色之间的关系是"原生那套"，而不是随手挑的色。
+ */
+enum class ThemePreset(val seedArgb: Int?) {
+    DYNAMIC(null),
+    HPU_BLUE(com.zzupocket.app.core.SchoolConfig.BRAND_SEED_ARGB),
+    PURPLE(0xFF6750A4.toInt()),
+    BLUE(0xFF1A73E8.toInt()),
+    TEAL(0xFF00838F.toInt()),
+    GREEN(0xFF2E7D32.toInt()),
+    AMBER(0xFFE8710A.toInt()),
+    PINK(0xFFD81B60.toInt()),
+    GRAPHITE(0xFF546E7A.toInt()),
+}
+
+data class UiPrefs(
+    /** 是否显示周六周日（关掉就是只显示工作日 5 列，列宽更宽、字更大） */
+    val showWeekend: Boolean = true,
+    /**
+     * 周末延长：在周日之后再挂一天「周八」，让课表多一列空白格子。
+     *
+     * 为什么要这个：有些周的安排会溢到"下周一"（调休/补课/实训），或者单纯想把周末多切一天出来
+     * 自己排日程，7 列的网格装不下。它**只影响课表网格的列数**，不产生任何课程 ——
+     * 数据里没有 weekday=8 的课，那一列本来就是空的。
+     *
+     * 依赖 [showWeekend]：关掉周末时「周八」没有锚点（周五后面直接接周八很怪），
+     * 所以此时不生效，设置页会把这个开关置灰。
+     */
+    val weekendExtended: Boolean = false,
+    val blockBorder: BlockBorder = BlockBorder.DASHED,
+    val courseTextMode: CourseTextMode = CourseTextMode.NAME_ROOM,
+    val density: GridDensity = GridDensity.STANDARD,
+    /** 全应用字号缩放（默认跟随系统）；在 MainActivity 主题层覆盖 LocalDensity 生效 */
+    val fontScale: AppFontScale = AppFontScale.SYSTEM,
+    /** "正在上的课"描边高亮 —— 借鉴 Sked 的 liveCourseOutline */
+    val liveOutlineEnabled: Boolean = true,
+    val liveOutlineWidth: Int = 2,
+    val colorMode: CourseColorMode = CourseColorMode.COLORFUL,
+    /** 手动指定入学年；为空则不过滤（早期版本会从学号推断，已经改掉了） */
+    val enrollmentYearOverride: Int? = null,
+    /** 自定义课表背景图的文件路径；null = 用默认背景 */
+    val backgroundPath: String? = null,
+    /** 壁纸浓淡：图片自身的不透明度 */
+    val backgroundOpacity: Float = 0.7f,
+    /** 壁纸模糊半径（dp），0 = 完全清晰 */
+    val backgroundBlur: Float = 6f,
+    /**
+     * 底色浓度：图片上那层主题底色的强度，越大字越清楚。
+     * 和 [backgroundOpacity] 是乘法关系 —— 70% × 40% 大约让照片保留四成强度，
+     * 壁纸看得出来、正文也读得清。
+     */
+    val backgroundScrim: Float = 0.4f,
+    /** 课表页的底部导航栏也一起透明（只有课表 tab 生效） */
+    val wallpaperNavBar: Boolean = true,
+    /** 每次换图 +1，用来让内存里的位图缓存失效 */
+    val backgroundVersion: Int = 0,
+    /** 全应用配色预设（默认河南理工蓝；用户可在外观页切回动态取色） */
+    val themePreset: ThemePreset = ThemePreset.HPU_BLUE,
+    /** 作息时间：默认按日期自动切换（河南理工春/秋两套作息） */
+    val periodMode: com.zzupocket.app.domain.HpuPeriods.PeriodMode =
+        com.zzupocket.app.domain.HpuPeriods.PeriodMode.AUTO,
+    /** 深浅色（默认跟随系统） */
+    val darkMode: DarkMode = DarkMode.SYSTEM,
+    /** 深色对比度（只在深色下生效，默认标准 = 系统原生观感） */
+    val darkContrast: DarkContrast = DarkContrast.STANDARD,
+    /**
+     * 深色保留颜色（Material 3 Expressive 的 2025 spec）：深色表面带主色色相、
+     * 明度整体上抬，不再走近灰的默认深色底。只在深色下生效。
+     */
+    val darkTinted: Boolean = false,
+    /**
+     * 「显示描述」（默认开）。关掉后界面只留一行短提示，隐藏原理、例外、错误原因
+     * 这类补充信息。空态、错误、数值、状态不属于描述，任何情况下都不受它影响。
+     */
+    val showDescriptions: Boolean = true,
+    /** dock 上是否保留「专注」这一格 */
+    val showFocusInDock: Boolean = true,
+    /** 小组件时间显示为节次（「第3-4节」）；false（默认）= 时刻（10:10-11:50） */
+    val widgetTimeAsPeriod: Boolean = false,
+    /**
+     * 「2×2 下一节课」行样式偏好：WidgetSchedule.ROW_MODE_*（auto / compact / mini）。
+     * auto = 按画布高度走「永不蒸发阶梯」；compact = 强制紧凑三行（放不下自动回退阶梯）；
+     * mini = 强制单行。
+     */
+    val widgetRowMode: String = "auto",
+    /** 小组件行内显示地点（2×2 / 4×2 / 周课表通用）；默认开 */
+    val widgetShowPlace: Boolean = true,
+    /** 小组件行内显示时间段；默认开。关掉后只看得到课名（+地点） */
+    val widgetShowTime: Boolean = true,
+    /** 周课表（4×5）格子内显示地点；默认开。关掉只影响周课表 */
+    val widgetWeekShowPlace: Boolean = true,
+    /** 周课表格子内显示开始时刻；默认开 */
+    val widgetWeekShowTime: Boolean = true,
+    /** 周课表底部的周末明细条（周六/日有课时出现）；默认开 */
+    val widgetWeekendStrip: Boolean = true,
+    /**
+     * 4×2 今明课表行样式：WidgetSchedule.ROW_MODE_*（auto / stacked / mini）。
+     * auto = 「地点｜时间」同行（紧凑两行式）；stacked = 课名/地点/时间竖排三行；
+     * mini = 课名 + 时间单行。4×2 列宽是 2×2 的一倍多，紧凑三行（小字号）与
+     * auto 同形，不单设。
+     */
+    /**
+     * 2×2 下一节的字号档：WidgetSchedule.COMPACT_TIER_AUTO 或档位 label
+     * （NEXT_CLASS_COMPACT_TIERS 里的 label：大字14/13/11 / 中字13/12/11 /
+     * 标准13/11/11 / 矮盒12/10/10）。auto = 按组件高度从大字档逐级回退；
+     * 手动指定 = 强制该档（贴边也给，与行样式强制同哲学）。
+     */
+    val widgetFontTier: String = WidgetSchedule.COMPACT_TIER_AUTO,
+    /** 2×2 表头样式：HEADER_CLASSIC（「今天 · 第 4 周」）或 HEADER_COMPACT（带右侧周几）。 */
+    val widgetHeaderStyle: String = WidgetSchedule.HEADER_CLASSIC,
+    val widgetTwoDayStyle: String = "auto",
+    /**
+     * 4×2 今明课表「每列最多几行课」：auto / 2 / 3 / 4。
+     * auto（默认）= 按组件画布高度自动估算；手动值提高"最多尝试行数"，
+     * 但真正画几行仍经 [WidgetSchedule.twoDayPlan] 的换行感知装柜校验，画不下自动裁，
+     * 不会画出被截断的半截课（沿用 0.32.5 的教训）。
+     */
+    val widgetColumnRows: String = "auto",
+    /** 桌面启动图标配色（LauncherIcon.IconColor 名）；默认理工蓝 */
+    val iconColor: String = "BLUE",
+    /** 检测更新里被用户「不再提醒」的版本号（如 "0.33.0"）；null = 没屏蔽过任何版本 */
+    val updateMutedVersion: String? = null,
+) {
+    /**
+     * 课表网格的列数：默认 7 天，关掉周末 5 天，开了「周末延长」再多一天（周八）。
+     *
+     * 周末延长只在周末可见时生效——否则第 8 天会紧跟在周五后面，那就不是"延长周末"了。
+     */
+    val dayCount: Int get() = when {
+        !showWeekend -> 5
+        weekendExtended -> 8
+        else -> 7
+    }
+
+    val cellHeightDp: Int
+        get() = when (density) {
+            GridDensity.COMPACT -> 48
+            GridDensity.STANDARD -> 54
+            GridDensity.COMFORTABLE -> 64
+        }
+
+    val courseFontSp: Float
+        get() = when (density) {
+            GridDensity.COMPACT -> 9.5f
+            GridDensity.STANDARD -> 11f
+            GridDensity.COMFORTABLE -> 12.5f
+        }
+
+    val roomFontSp: Float
+        get() = when (density) {
+            GridDensity.COMPACT -> 8f
+            GridDensity.STANDARD -> 9f
+            GridDensity.COMFORTABLE -> 10f
+        }
+}
+
+private val Context.uiPrefsStore: DataStore<Preferences> by preferencesDataStore(name = "ui_prefs")
+
+class UiPrefsStore(context: Context) {
+
+    private val store = context.applicationContext.uiPrefsStore
+
+    val flow: Flow<UiPrefs> = store.data.map { p ->
+        UiPrefs(
+            showWeekend = p[KEY_SHOW_WEEKEND] ?: true,
+            weekendExtended = p[KEY_WEEKEND_EXTENDED] ?: false,
+            blockBorder = p[KEY_BLOCK_BORDER]?.let { runCatching { BlockBorder.valueOf(it) }.getOrNull() }
+                ?: BlockBorder.DASHED,
+            courseTextMode = p[KEY_TEXT_MODE]
+                ?.let { runCatching { CourseTextMode.valueOf(it) }.getOrNull() }
+                ?.takeIf { it != CourseTextMode.NAME_TEACHER_ROOM }   // 老设置自动降级
+                ?: CourseTextMode.NAME_ROOM,
+            density = p[KEY_DENSITY]?.let { runCatching { GridDensity.valueOf(it) }.getOrNull() }
+                ?: GridDensity.STANDARD,
+            fontScale = p[KEY_FONT_SCALE]?.let { runCatching { AppFontScale.valueOf(it) }.getOrNull() }
+                ?: AppFontScale.SYSTEM,
+            liveOutlineEnabled = p[KEY_LIVE_OUTLINE] ?: true,
+            liveOutlineWidth = p[KEY_LIVE_OUTLINE_WIDTH] ?: 2,
+            colorMode = p[KEY_COLOR_MODE]?.let { runCatching { CourseColorMode.valueOf(it) }.getOrNull() }
+                ?: CourseColorMode.COLORFUL,
+            enrollmentYearOverride = p[KEY_ENROLL_YEAR]?.takeIf { it > 0 },
+            backgroundPath = p[KEY_BG_PATH],
+            backgroundOpacity = p[KEY_BG_OPACITY] ?: 0.7f,
+            backgroundBlur = p[KEY_BG_BLUR] ?: 6f,
+            backgroundScrim = p[KEY_BG_SCRIM] ?: 0.4f,
+            wallpaperNavBar = p[KEY_BG_NAVBAR] ?: true,
+            backgroundVersion = p[KEY_BG_VERSION] ?: 0,
+            themePreset = p[KEY_THEME_PRESET]?.let { runCatching { ThemePreset.valueOf(it) }.getOrNull() }
+                ?: ThemePreset.HPU_BLUE,
+            periodMode = p[KEY_PERIOD_MODE]?.let {
+                runCatching { com.zzupocket.app.domain.HpuPeriods.PeriodMode.valueOf(it) }.getOrNull()
+            } ?: com.zzupocket.app.domain.HpuPeriods.PeriodMode.AUTO,
+            darkMode = p[KEY_DARK_MODE]?.let { runCatching { DarkMode.valueOf(it) }.getOrNull() }
+                ?: DarkMode.SYSTEM,
+            darkContrast = p[KEY_DARK_CONTRAST]?.let { runCatching { DarkContrast.valueOf(it) }.getOrNull() }
+                ?: DarkContrast.STANDARD,
+            darkTinted = p[KEY_DARK_TINTED] ?: false,
+            // 老用户的 DataStore 里没有这个键 → 默认 true，不需要迁移
+            showDescriptions = p[KEY_SHOW_DESCRIPTIONS] ?: true,
+            showFocusInDock = p[KEY_SHOW_FOCUS_IN_DOCK] ?: true,
+            widgetTimeAsPeriod = p[KEY_WIDGET_TIME_AS_PERIOD] ?: false,
+            widgetRowMode = p[KEY_WIDGET_ROW_MODE]?.takeIf { it.isNotBlank() } ?: "auto",
+            widgetShowPlace = p[KEY_WIDGET_SHOW_PLACE] ?: true,
+            widgetShowTime = p[KEY_WIDGET_SHOW_TIME] ?: true,
+            widgetWeekShowPlace = p[KEY_WIDGET_WEEK_SHOW_PLACE] ?: true,
+            widgetWeekShowTime = p[KEY_WIDGET_WEEK_SHOW_TIME] ?: true,
+            widgetWeekendStrip = p[KEY_WIDGET_WEEKEND_STRIP] ?: true,
+            widgetFontTier = p[KEY_WIDGET_FONT_TIER]?.takeIf { it.isNotBlank() } ?: WidgetSchedule.COMPACT_TIER_AUTO,
+            widgetHeaderStyle = p[KEY_WIDGET_HEADER_STYLE]?.takeIf { it.isNotBlank() } ?: WidgetSchedule.HEADER_CLASSIC,
+            widgetTwoDayStyle = p[KEY_WIDGET_TWO_DAY_STYLE]?.takeIf { it.isNotBlank() } ?: "auto",
+            widgetColumnRows = p[KEY_WIDGET_COLUMN_ROWS]?.takeIf { it in setOf("auto", "2", "3", "4") } ?: "auto",
+            iconColor = p[KEY_ICON_COLOR]?.takeIf { it in setOf("BLUE", "PURPLE", "TEAL", "GREEN", "AMBER", "PINK") }
+                ?: "BLUE",
+            updateMutedVersion = p[KEY_UPDATE_MUTED]?.takeIf { it.isNotBlank() },
+        )
+    }
+
+    /** 「不再提醒」该版本的红点；传 null 清掉全部屏蔽（给设置里未来可能的"重新开启提醒"用） */
+    suspend fun setUpdateMutedVersion(v: String?) =
+        store.edit { p -> p[KEY_UPDATE_MUTED] = v.orEmpty() }
+
+    suspend fun setShowWeekend(v: Boolean) = store.edit { it[KEY_SHOW_WEEKEND] = v }
+    /** 周末延长（多一列「周八」）；只在显示周末时有意义，见 [UiPrefs.dayCount] */
+    suspend fun setWeekendExtended(v: Boolean) = store.edit { it[KEY_WEEKEND_EXTENDED] = v }
+    suspend fun setBlockBorder(v: BlockBorder) = store.edit { it[KEY_BLOCK_BORDER] = v.name }
+    suspend fun setCourseTextMode(v: CourseTextMode) = store.edit { it[KEY_TEXT_MODE] = v.name }
+    suspend fun setDensity(v: GridDensity) = store.edit { it[KEY_DENSITY] = v.name }
+    suspend fun setFontScale(v: AppFontScale) = store.edit { it[KEY_FONT_SCALE] = v.name }
+    suspend fun setLiveOutline(v: Boolean) = store.edit { it[KEY_LIVE_OUTLINE] = v }
+    suspend fun setLiveOutlineWidth(v: Int) = store.edit { it[KEY_LIVE_OUTLINE_WIDTH] = v }
+    suspend fun setColorMode(v: CourseColorMode) = store.edit { it[KEY_COLOR_MODE] = v.name }
+    suspend fun setEnrollmentYear(v: Int?) = store.edit {
+        if (v == null) it.remove(KEY_ENROLL_YEAR) else it[KEY_ENROLL_YEAR] = v
+    }
+
+    /** 换背景图：路径 + 版本号一起写 */
+    suspend fun setBackground(path: String) = store.edit { p ->
+        p[KEY_BG_PATH] = path
+        p[KEY_BG_VERSION] = (p[KEY_BG_VERSION] ?: 0) + 1
+    }
+
+    suspend fun setBackgroundOpacity(v: Float) = store.edit { p ->
+        p[KEY_BG_OPACITY] = v.coerceIn(0.15f, 0.95f)
+    }
+
+    suspend fun setBackgroundBlur(v: Float) = store.edit { p ->
+        p[KEY_BG_BLUR] = v.coerceIn(0f, 20f)
+    }
+
+    suspend fun setBackgroundScrim(v: Float) = store.edit { p ->
+        p[KEY_BG_SCRIM] = v.coerceIn(0f, 0.9f)
+    }
+
+    suspend fun setWallpaperNavBar(v: Boolean) = store.edit { p -> p[KEY_BG_NAVBAR] = v }
+
+    suspend fun setThemePreset(v: ThemePreset) = store.edit { p -> p[KEY_THEME_PRESET] = v.name }
+
+    suspend fun setPeriodMode(v: com.zzupocket.app.domain.HpuPeriods.PeriodMode) = store.edit { p ->
+        p[KEY_PERIOD_MODE] = v.name
+    }
+
+    suspend fun setDarkMode(v: DarkMode) = store.edit { p -> p[KEY_DARK_MODE] = v.name }
+
+    suspend fun setDarkContrast(v: DarkContrast) = store.edit { p -> p[KEY_DARK_CONTRAST] = v.name }
+
+    suspend fun setDarkTinted(v: Boolean) = store.edit { p -> p[KEY_DARK_TINTED] = v }
+
+    /** 小组件时间显示为节次；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetTimeAsPeriod(v: Boolean) = store.edit { p -> p[KEY_WIDGET_TIME_AS_PERIOD] = v }
+
+    /** 「2×2 下一节课」行样式偏好（WidgetSchedule.ROW_MODE_*）；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetRowMode(v: String) = store.edit { p -> p[KEY_WIDGET_ROW_MODE] = v }
+
+    /** 小组件行内显示地点；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetShowPlace(v: Boolean) = store.edit { p -> p[KEY_WIDGET_SHOW_PLACE] = v }
+
+    /** 小组件行内显示时间段；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetShowTime(v: Boolean) = store.edit { p -> p[KEY_WIDGET_SHOW_TIME] = v }
+
+    /** 周课表格子内显示地点；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetWeekShowPlace(v: Boolean) = store.edit { p -> p[KEY_WIDGET_WEEK_SHOW_PLACE] = v }
+
+    /** 周课表格子内显示开始时刻；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetWeekShowTime(v: Boolean) = store.edit { p -> p[KEY_WIDGET_WEEK_SHOW_TIME] = v }
+
+    /** 周课表周末明细条；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetWeekendStrip(v: Boolean) = store.edit { p -> p[KEY_WIDGET_WEEKEND_STRIP] = v }
+
+    /** 4×2 今明课表行样式；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetTwoDayStyle(v: String) = store.edit { p -> p[KEY_WIDGET_TWO_DAY_STYLE] = v }
+
+    /** 4×2 每列行数（auto/2/3/4）；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetColumnRows(v: String) = store.edit { p ->
+        p[KEY_WIDGET_COLUMN_ROWS] = if (v in setOf("auto", "2", "3", "4")) v else "auto"
+    }
+
+    /** 桌面启动图标配色（LauncherIcon.IconColor 名）；切换 alias 由 LauncherIcon.apply 负责 */
+    suspend fun setIconColor(v: String) = store.edit { p ->
+        p[KEY_ICON_COLOR] = v
+    }
+
+    /** 2×2 字号档；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetFontTier(v: String) = store.edit { p -> p[KEY_WIDGET_FONT_TIER] = v }
+
+    /** 2×2 表头样式；写入后由调用方触发 Widgets.refreshAll */
+    suspend fun setWidgetHeaderStyle(v: String) = store.edit { p -> p[KEY_WIDGET_HEADER_STYLE] = v }
+
+    /** 「更多 → 界面 → 显示描述」；写入后 AppNav 根部的 CompositionLocal 立刻全树重组 */
+    suspend fun setShowDescriptions(v: Boolean) = store.edit { p -> p[KEY_SHOW_DESCRIPTIONS] = v }
+
+    suspend fun setShowFocusInDock(v: Boolean) = store.edit { p -> p[KEY_SHOW_FOCUS_IN_DOCK] = v }
+
+    // ── 教学周参数（按学期分开存）──────────────────────────────────────
+
+    /**
+     * 读某个学期的周次参数。
+     *
+     * 为什么按学期存：不同学期开学日期不同；而且用户"手改过"这件事必须跟着学期走，
+     * 否则新学期会被上学期的旧值粘住。
+     */
+    suspend fun weekSettings(semesterId: Int): WeekSettings {
+        val p = store.data.first()
+        return WeekSettings(
+            weekOneStart = p[weekOneKey(semesterId)]?.let { LocalDate.ofEpochDay(it) },
+            startDay = p[weekStartDayKey(semesterId)]
+                ?.let { v -> runCatching { WeekStartDay.valueOf(v) }.getOrNull() }
+                ?: WeekStartDay.MONDAY,
+            totalWeeks = p[weekTotalKey(semesterId)]?.takeIf { it in 1..30 },
+            confirmed = p[weekConfirmedKey(semesterId)] ?: false,
+            source = p[weekSourceKey(semesterId)]
+                ?.let { v -> runCatching { WeekSource.valueOf(v) }.getOrNull() }
+                ?: WeekSource.INFERRED,
+        )
+    }
+
+    suspend fun saveWeekSettings(semesterId: Int, s: WeekSettings) = store.edit { p ->
+        if (s.weekOneStart != null) {
+            p[weekOneKey(semesterId)] = s.weekOneStart.toEpochDay()
+        } else {
+            p.remove(weekOneKey(semesterId))
+        }
+        p[weekStartDayKey(semesterId)] = s.startDay.name
+        if (s.totalWeeks != null) {
+            p[weekTotalKey(semesterId)] = s.totalWeeks
+        } else {
+            p.remove(weekTotalKey(semesterId))
+        }
+        p[weekConfirmedKey(semesterId)] = s.confirmed
+        p[weekSourceKey(semesterId)] = s.source.name
+    }
+
+    /**
+     * 一次性清理 0.31.6 及以前那枚"自动推断"的研究生锚点。
+     *
+     * 那枚锚点是用课表内容反推出来的，实测存在 +1 周的错误（第 7 周被算成第 8 周）；
+     * 如果不清理，它会被新逻辑当成"用户已确认"，错误就永远留着。
+     */
+    suspend fun migrateLegacyWeekAnchor() {
+        val p = store.data.first()
+        if (p[KEY_WEEK_SETTINGS_MIGRATED] == true) return
+        store.edit { e ->
+            e.remove(KEY_GMS_WEEK_ONE)
+            e.remove(KEY_GMS_ANCHOR_TERM)
+            e[KEY_WEEK_SETTINGS_MIGRATED] = true
+        }
+    }
+
+    /** 清掉某学期的周次参数（「重置为自动值」用）：下次进入按「教务校历 → 推断」重填 */
+    suspend fun clearWeekSettings(semesterId: Int) = store.edit { p ->
+        p.remove(weekOneKey(semesterId))
+        p.remove(weekStartDayKey(semesterId))
+        p.remove(weekTotalKey(semesterId))
+        p.remove(weekConfirmedKey(semesterId))
+        p.remove(weekSourceKey(semesterId))
+    }
+
+    /** 恢复默认壁纸：清掉图片和所有调节项，版本号照旧 +1（缓存一样要失效） */
+    suspend fun clearBackground() = store.edit { p ->
+        p.remove(KEY_BG_PATH)
+        p.remove(KEY_BG_OPACITY)
+        p.remove(KEY_BG_BLUR)
+        p.remove(KEY_BG_SCRIM)
+        p[KEY_BG_VERSION] = (p[KEY_BG_VERSION] ?: 0) + 1
+    }
+
+    private companion object {
+        val KEY_SHOW_WEEKEND = booleanPreferencesKey("show_weekend")
+        val KEY_WEEKEND_EXTENDED = booleanPreferencesKey("weekend_extended")
+        val KEY_BLOCK_BORDER = stringPreferencesKey("block_border")
+        val KEY_TEXT_MODE = stringPreferencesKey("course_text_mode")
+        val KEY_DENSITY = stringPreferencesKey("grid_density")
+        val KEY_FONT_SCALE = stringPreferencesKey("app_font_scale")
+        val KEY_LIVE_OUTLINE = booleanPreferencesKey("live_outline")
+        val KEY_LIVE_OUTLINE_WIDTH = intPreferencesKey("live_outline_width")
+        val KEY_COLOR_MODE = stringPreferencesKey("color_mode")
+        val KEY_ENROLL_YEAR = intPreferencesKey("enrollment_year")
+        val KEY_BG_PATH = stringPreferencesKey("grid_bg_path")
+        val KEY_BG_OPACITY = floatPreferencesKey("grid_bg_opacity")
+        val KEY_BG_BLUR = floatPreferencesKey("grid_bg_blur")
+        val KEY_BG_SCRIM = floatPreferencesKey("grid_bg_scrim")
+        val KEY_BG_NAVBAR = booleanPreferencesKey("grid_bg_navbar")
+        val KEY_BG_VERSION = intPreferencesKey("grid_bg_version")
+        val KEY_THEME_PRESET = stringPreferencesKey("theme_preset")
+        val KEY_PERIOD_MODE = stringPreferencesKey("period_mode")
+        val KEY_DARK_MODE = stringPreferencesKey("dark_mode")
+        val KEY_DARK_CONTRAST = stringPreferencesKey("dark_contrast")
+        val KEY_DARK_TINTED = booleanPreferencesKey("dark_tinted")
+        val KEY_WIDGET_TIME_AS_PERIOD = booleanPreferencesKey("widget_time_as_period")
+        val KEY_WIDGET_ROW_MODE = stringPreferencesKey("widget_row_mode")
+        val KEY_WIDGET_SHOW_PLACE = booleanPreferencesKey("widget_show_place")
+        val KEY_WIDGET_SHOW_TIME = booleanPreferencesKey("widget_show_time")
+        val KEY_WIDGET_WEEK_SHOW_PLACE = booleanPreferencesKey("widget_week_show_place")
+        val KEY_WIDGET_WEEK_SHOW_TIME = booleanPreferencesKey("widget_week_show_time")
+        val KEY_WIDGET_WEEKEND_STRIP = booleanPreferencesKey("widget_weekend_strip")
+        val KEY_WIDGET_TWO_DAY_STYLE = stringPreferencesKey("widget_two_day_style")
+        val KEY_WIDGET_COLUMN_ROWS = stringPreferencesKey("widget_column_rows")
+        val KEY_ICON_COLOR = stringPreferencesKey("icon_color")
+        val KEY_WIDGET_FONT_TIER = stringPreferencesKey("widget_font_tier")
+        val KEY_WIDGET_HEADER_STYLE = stringPreferencesKey("widget_header_style")
+        val KEY_SHOW_DESCRIPTIONS = booleanPreferencesKey("show_descriptions")
+        val KEY_SHOW_FOCUS_IN_DOCK = booleanPreferencesKey("show_focus_in_dock")
+
+        /** 旧的单槽位房间名（历史遗留）：已不再读写，留着只是没去动老用户的存储 */
+        val KEY_UPDATE_MUTED = stringPreferencesKey("update_muted_version")
+
+        /** 旧版（0.31.6 及以前）研究生周次锚点：只保留键名用于一次性清理 */
+        val KEY_GMS_WEEK_ONE = androidx.datastore.preferences.core.longPreferencesKey("gms_week_one_epoch_day")
+        val KEY_GMS_ANCHOR_TERM = stringPreferencesKey("gms_anchor_term")
+
+        /** 一次性迁移标记：老锚点已清理（见 [UiPrefsStore.migrateLegacyWeekAnchor]） */
+        val KEY_WEEK_SETTINGS_MIGRATED = booleanPreferencesKey("week_settings_migrated_v1")
+
+        // 教学周参数按学期分开存：键名里带学期 id
+        fun weekOneKey(semesterId: Int) = androidx.datastore.preferences.core.longPreferencesKey("week_one_$semesterId")
+        fun weekStartDayKey(semesterId: Int) = stringPreferencesKey("week_start_day_$semesterId")
+        fun weekTotalKey(semesterId: Int) = intPreferencesKey("week_total_$semesterId")
+        fun weekConfirmedKey(semesterId: Int) = booleanPreferencesKey("week_confirmed_$semesterId")
+        fun weekSourceKey(semesterId: Int) = stringPreferencesKey("week_source_$semesterId")
+    }
+}

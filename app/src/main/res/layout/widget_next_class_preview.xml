@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================
+  「选择小组件」时的实时预览图（appwidget-provider 的 android:previewLayout）
+  「下一节课」2×2 的预览（真实画布 163×195dp）
+  ============================================================
+
+  早期这几个组件在选择页里**看不到预览**：provider 里 `android:previewImage` 写的是
+  `@mipmap/ic_launcher`，于是选择页里显示的是一张 App 图标，谁也看不出组件长什么样。
+  现在两条路都补上：
+    1. android:previewLayout（本文件）—— Android 12+ 的启动器**直接 inflate 它**，
+       预览就是真实布局的外观，改了布局预览自动跟着变；
+    2. android:previewImage（res/drawable/widget_preview_*.png）—— 给只认图片的启动器兜底
+       （由 tools/gen-widget-preview.ps1 按同一套几何生成）。
+
+  为什么预览布局不直接用真实布局：真实布局 next_rows 里的行是运行期 addView 的
+  （RemoteViews 填内容），拿来预览会是一张空卡。所以这里写一份**填了样例数据**的
+  独立布局：两行都是**紧凑三行式**（色条 + 课名 / 地点 / 时间段各占一行，均单行；
+  本节 13/11，下一节 12/10）——#13 七轮（2026-11-06 用户拍板）：地点不再和时间段
+  挤同一行，长教室名由渲染层先缩字号（下限 9dp）再裁左边。满档竖排只给拉高的 2×3，
+  更矮的盒子落单行一行式（widget_course_row_mini.xml）。
+  免得"选的时候一个样、上桌面一个样"。
+  样例一律虚构的课名/教室，不涉及真实个人信息。
+  ⚠️ 颜色写死（预览不走 RemoteViews，拿不到主题色的运行期 tint），取 App 默认主题的值。
+  ⚠️ 卡片内边距与真实渲染一致：真实渲染层 14→10（实测 chrome = 20 + 表头 + 行距 2）。
+  ============================================================
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="10dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:includeFontPadding="false"
+        android:maxLines="1"
+        android:text="@string/widget_preview_next_header"
+        android:textColor="@color/widget_text"
+        android:textSize="@dimen/widget_col_header"
+        android:textStyle="bold" />
+
+    <!-- 本节行：紧凑三行式 = 色条 + 课名 / 地点 / 时间段各一行（13/11） -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="@dimen/widget_gap_xs"
+        android:layout_weight="1"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="@dimen/widget_bar_w"
+            android:layout_height="@dimen/widget_bar_h"
+            android:background="#4C7FD6" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/widget_gap"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_preview_next_name"
+                android:textColor="@color/widget_text"
+                android:textSize="13dp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_preview_next_place"
+                android:textColor="@color/widget_text_hint"
+                android:textSize="11dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="@string/widget_preview_next_range"
+                android:textColor="@color/widget_text_dim"
+                android:textSize="11dp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 下一节行：同款紧凑三行式（课名 12 / 地点、时间段 10） -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:baselineAligned="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="@dimen/widget_bar_w"
+            android:layout_height="@dimen/widget_bar_h"
+            android:background="#C97F5A" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/widget_gap"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="程序设计基础"
+                android:textColor="@color/widget_text"
+                android:textSize="12dp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="南3 202"
+                android:textColor="@color/widget_text_hint"
+                android:textSize="10dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:includeFontPadding="false"
+                android:maxLines="1"
+                android:text="14:00-15:40"
+                android:textColor="@color/widget_text_dim"
+                android:textSize="10dp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
