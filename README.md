@@ -3,7 +3,7 @@
 河南理工大学校园助手（Android） · 基于上游项目 [ZZUPocket](https://github.com/3beuml/ZZUPocket)（MIT）适配
 
 > **适配状态（2026-11-20，v0.2.7-hpu）**：河南理工版已可用——**统一认证登录、教务课表、
-> 宿舍电费、空闲教室**均已接通；**图书馆（座位/研讨间）尚未实现**（协议已测绘，
+> 宿舍电费**均已接通；**图书馆（座位/研讨间）、空闲教室尚未实现**（协议已测绘，
 > 见 [`docs/interfaces/hpu-library-protocol.md`](docs/interfaces/hpu-library-protocol.md)，代码层未开工）；
 > 校园卡按需求未做。进度与已知限制见
 > [`docs/河南理工适配方案.md`](docs/河南理工适配方案.md)。
