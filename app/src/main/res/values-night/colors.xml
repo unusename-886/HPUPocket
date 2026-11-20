@@ -10,7 +10,5 @@
     <color name="widget_text_dim">#CAC4D0</color>
     <color name="widget_text_hint">#9ECAC4D0</color>
     <color name="widget_divider">#49454F</color>
-    <color name="widget_accent">#FFAAC7FF</color>
     <color name="widget_bar">#FFAAC7FF</color>
-    <color name="widget_error">#F2B8B5</color>
 </resources>

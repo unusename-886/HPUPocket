@@ -42,9 +42,7 @@ object SchoolConfig {
     const val HOST_UIA = "uia.hpu.edu.cn"
     const val HOST_SSO = "sso.hpu.edu.cn"
     const val HOST_JW = "zhjw.hpu.edu.cn"
-    const val HOST_JW_LEGACY = "lgjw.hpu.edu.cn"   // 2024 年旧移动端接口域名，现已跳 WebVPN
-    const val HOST_PORTAL = "zhlg.hpu.edu.cn"      // 智慧理工
-    const val HOST_LIB = "lib.hpu.edu.cn"
+    // 旧移动端接口域名 lgjw.hpu.edu.cn（2024 年）现已整站跳 WebVPN，不再直连，代码里不留常量。
     const val HOST_WEBVPN = "webvpn.hpu.edu.cn"
 
     const val URL_UIA = "https://$HOST_UIA/"
@@ -59,20 +57,14 @@ object SchoolConfig {
      */
     const val URL_JW_EAMS = "${URL_JW}eams/"
 
-    const val URL_PORTAL = "https://$HOST_PORTAL/hnlg_portal/"
-    const val URL_LIB = "https://$HOST_LIB/"
-
     /**
-     * 微后勤「数字后勤服务大厅」—— 宿舍用电查询 H5 入口。
+     * 微后勤「数字后勤服务大厅」（`whgfwdt.hpu.edu.cn`）的 H5 —— **本版不接入，代码里没有入口**。
      *
-     * 用户给的微信内网页（`whgfwdt` = 微后勤服务大厅，`hnlg` = 河南理工）。
-     * 与另一套免登录的 `sdcx.hpu.edu.cn`（北校区 WebForms 电费）**不是同一系统**：
-     * 这里的 `/fapi` 接口全部要微信 OAuth 令牌，原生 HTTP 直连会 401，
-     * 所以只能在应用内 WebView 里打开、让站点自己完成登录。协议与取舍见
-     * `docs/interfaces/hnlg-wechat-electricity.md`。
+     * 它的 `/fapi` 全要微信 OAuth 令牌，原生 HTTP 直连一律 401，只能在内置 WebView 里打开；
+     * 而它又依赖微信 UA 与授权回调，套壳 WebView 也拿不到登录态。曾经写过一版页面，
+     * 因为永远打不开登录而从未接到任何入口，已整个删除。协议与取舍留在
+     * `docs/interfaces/hnlg-wechat-electricity.md`，宿舍电费走下面那套免登录 WebForms。
      */
-    const val HOST_HNLG = "whgfwdt.hpu.edu.cn"
-    const val URL_HNLG = "https://$HOST_HNLG/hnlg/index.html#/home/index"
 
     /**
      * 宿舍电费**免登录**查询站（后勤官网列出的北校区电费查询）。

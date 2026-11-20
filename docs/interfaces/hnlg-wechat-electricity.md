@@ -103,39 +103,47 @@ http://ykt.hpu.edu.cn/server/auth/host/open?host=27&org=2&mer=0&app=electric&s_h
 
 ---
 
-## 5. App 接入方案（已实施）
+## 5. App 接入方案（WebView 方案已放弃）
 
-> **2026-11-20 真机验证修正**：应用内 WebView 打开 H5 会立刻跳
+> **2026-11-20 真机验证结论**：应用内 WebView 打开 H5 会立刻跳
 > `open.weixin.qq.com/oauth2/authorize?scope=snsapi_base` 并卡死 —— 微信 OAuth 靠
 > JSBridge 校验真实微信客户端，普通 WebView（伪造 UA 也不行）根本过不去。
-> **结论：微后勤 H5 在任何非微信客户端都无法登录，WebView 仅作"看页面"用途，不是查询主路径。**
+> **微后勤 H5 在任何非微信客户端都无法登录，所以它不能作为 App 内的查询路径。**
 >
-> 因此最终落地为**双入口**：
-> 1. **主路径（原生、免登录）**：`ui/electricity/` 走 `sdcx.hpu.edu.cn` 免登录站，
->    楼栋→楼层→房间三级联动查剩余电量（协议见 `hpu-electricity-protocol.md`），
->    App 内直接出结果，不依赖微信。2026-11-20 实测拿到 `7#201剩余电量：XXX.XX 度`。
-> 2. **补充入口（WebView）**：`ui/web/HnlgWebScreen.kt` 承载本 H5，供"看完整用电明细/缴费"，
->    需用户在微信环境完成验证（或 PC 扫码）。
->
-> 用户点「更多 → 校园服务 → 宿舍用电」进主路径；页内「去微后勤看完整信息/缴费」进补充入口。
-> 2026-11-20 再修：主路径支持**南/北校区切换**（南 `183.169.***.***:8080` / 北 `sdcx.hpu.edu.cn`），
-> 解析兼容南校区中文房号；查询结果缓存在 `ElectricityPrefsStore`，**首页课表下方**显示上次电量卡（不联网）。
+> **2026-11-20 收尾：曾写过一个内嵌这页的 WebView 页面，因为永远过不了登录，从未接到任何入口
+> （`ROUTE_HNLG` 注册了却没有任何地方 navigate 过去），已在同日的清理里**整个删除** ——
+> `ui/web/HnlgWebScreen.kt`、`ui/web/WebViewVhFix.kt`、`core/HnlgLinkPolicy.kt`
+> 及其单测都不在了，`SchoolConfig` 里对应的域名常量也一并移除。本文件只保留调研结论，
+> **代码层没有对应实现，不要再照下面的旧描述去找文件。**
 
-微后勤 WebView 页的实现（保留作补充入口）：
+实际落地的入口只有两条：
 
-- 入口：`更多 → 校园服务 → 宿舍用电`（`CampusScreen` + `AppNav` 的 `ROUTE_ELECTRICITY`）。
-- 加载 `SchoolConfig.URL_HNLG`，即用户给定的 hash 路由。
+1. **主路径（原生、免登录）**：`ui/electricity/` 走 `sdcx.hpu.edu.cn` 免登录站，
+   楼栋→楼层→房间三级联动查剩余电量（协议见 `hpu-electricity-protocol.md`），
+   App 内直接出结果，不依赖微信。2026-11-20 实测拿到 `7#201剩余电量：XXX.XX 度`。
+   支持**南/北校区切换**（南 `183.169.***.***:8080` / 北 `sdcx.hpu.edu.cn`），
+   解析兼容南校区中文房号；查询结果缓存在 `ElectricityPrefsStore`，
+   **首页课表下方**显示上次电量卡（不联网）。
+2. **缴费/明细的兜底（不进 WebView）**：电费页底部「更多功能」用 `core/WeChatBridge.kt`
+   —— 把公众号名「河南理工大学微后勤」复制到剪贴板并拉起微信，用户在微信内搜一搜即可。
+   这是"复制 + 跳转"，不承载页面，也就不存在登录态问题。
+
+**取舍**：不做原生查询客户端 —— 令牌只有微信 OAuth/扫码能拿，App 里硬编码或让用户粘贴令牌既不安全也易失效。
+若将来学校提供免登录的公开查询 API，可按 §4 接口清单原生化。
+
+> 下面这节是当时 WebView 方案的设计记录，**已不适用**，保留只为说明"为什么这条路走不通"。
+
+<details>
+<summary>已废弃：WebView 方案的设计细节（点开查看）</summary>
+
+- 入口：`更多 → 校园服务 → 宿舍用电`。
+- 加载 `https://whgfwdt.hpu.edu.cn/hnlg/index.html#/home/index`（hash 路由）。
 - WebView 配置：`javaScriptEnabled`、`domStorageEnabled`(localStorage 存 token)、
-  `CookieManager` 接受第三方 Cookie、`userAgent` 去掉 `;wv`（与可登录的移动端环境一致）。
-- 注入 `WebViewVhFix`（用于规避本工程 WebView 的 `vh=0` 老问题，实现见
-  `ui/web/WebViewVhFix`）。
-- `shouldOverrideUrlLoading`：`tel:` → 系统拨号；`http(s)` 站内继续 WebView 内跳转；
-  微信 OAuth (`open.weixin.qq.com`) 允许加载以便完成登录。
-- 顶栏提供「在微信中打开」兜底按钮（用微信扫码登录更稳妥）。
+  `CookieManager` 接受第三方 Cookie、`userAgent` 去掉 `;wv`。
+- 注入 `WebViewVhFix` 规避本工程 WebView 的 `vh=0` 老问题。
+- `shouldOverrideUrlLoading`：`tel:` → 系统拨号；`http(s)` 站内继续；微信 OAuth 允许加载。
 
-**取舍**：不做原生查询客户端 —— 令牌只有微信 OAuth/扫码能拿，App 里硬编码或让用户粘贴令牌既不安全也易失效；
-WebView 让站点自己管登录态与接口变更，维护成本最低。若将来学校提供免登录的公开查询 API，
-可按 §4 接口清单原生化。
+</details>
 
 ---
 

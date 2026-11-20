@@ -104,7 +104,6 @@ private const val ROUTE_WIDGET_SETTINGS = "widget_settings"
 private const val ROUTE_STORAGE = "storage"
 private const val ROUTE_ELECTRICITY = "electricity"
 private const val ROUTE_FREE_ROOM = "free_room"
-private const val ROUTE_HNLG = "hnlg"
 
 /** "重新裁剪"时用这个占位值代替相册 URI */
 private const val CROP_SOURCE_SAVED = "saved"
@@ -276,11 +275,6 @@ fun AppNav(initialRoute: String? = null, routeToken: Int = 0) {
                     com.zzupocket.app.ui.room.FreeRoomScreen(
                         onBack = { navController.popBackStack() },
                         onOpenLogin = { navController.navigate(ROUTE_LOGIN) },
-                    )
-                }
-                composable(ROUTE_HNLG) {
-                    com.zzupocket.app.ui.web.HnlgWebScreen(
-                        onBack = { navController.popBackStack() },
                     )
                 }
                 composable(ROUTE_ABOUT) {
