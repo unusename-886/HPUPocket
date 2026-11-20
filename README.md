@@ -12,9 +12,9 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-0.2.7--hpu-brightgreen)](../../releases)
-[![Android](https://img.shields.io/badge/Android-12%2B-3ddc84?style=flat&logo=android&logoColor=white)](#构建)
+[![Android](https://img.shields.io/badge/Android-12%2B-3ddc84?style=flat&logo=android&logoColor=white)](#下载安装)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7f52ff?style=flat&logo=kotlin&logoColor=white)](#技术栈)
-[![Tests](https://img.shields.io/badge/unit%20tests-288-brightgreen)](#参与贡献)
+![Tests](https://img.shields.io/badge/unit%20tests-288-brightgreen)
 
 > ⚠️ 本项目是非官方项目。
 > 接口来自公开网页的协议整理与社区项目经验，**随时可能失效或被学校调整**；
@@ -51,6 +51,9 @@
 
 
 ## 更新记录
+
+> 下方保留的是**上游郑州大学版**的更新记录（用于追溯改动来源）。河南理工版自身的改动
+> 以 [Releases](../../releases) 中每个版本的说明为准。
 
 **0.36.5（2026-11-17）**
 
@@ -172,16 +175,17 @@
 
 ## 下载安装
 
-河南理工版尚未发布正式 APK，当前请在 Android Studio 中以 `com.hpupocket.app` 构建调试包
-（Android 12 / API 31 及以上）。由于 `applicationId` 与郑州大学版不同，两版可在同一台手机共存、
-数据互不影响。
+河南理工版处于**早期适配阶段**，只有预发布包，请到 [Releases](../../releases) 下载
+`HPUPocket-0.2.7-hpu-release.apk`（Android 12 / API 31 及以上）。由于 `applicationId` 与郑州大学版
+不同（`com.hpupocket.app` vs 上游包名），两版可在同一台手机共存、数据互不影响。
 
-> 上游郑州大学版的历史下载方式：到 [Releases](../../releases) 下载
-> `ZZUPocket-0.36.5.apk`。
+> **这个包是 debug 签名构建的**：仅用于试用与验证，不是正式发布签名。等河南理工版接入稳定后
+> 会换成独立的 release keystore —— 届时签名变更，需要先卸载旧包再装新包，**本地数据会丢**。
+> 如果你自己要长期使用，建议用 Android Studio 自己构建（同一台机器的 debug 签名固定，
+> 可以一直覆盖安装）。
 
 - 装在手机上会走系统的"未知来源应用"授权；Flyme / MIUI 这类系统还需要在
   「设置 → 应用 → 权限」里给文件管理器或浏览器放行"安装未知应用"。
-- App 之间用同一套签名，所以**后续版本可以直接覆盖安装、数据不丢**。
 
 
 ## 首次使用
