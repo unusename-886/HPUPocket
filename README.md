@@ -3,8 +3,9 @@
 河南理工大学校园助手（Android） · 基于上游项目 [ZZUPocket](https://github.com/3beuml/ZZUPocket)（MIT）适配
 
 > **适配状态（2026-11-20，v0.2.7-hpu）**：河南理工版已可用——**统一认证登录、教务课表、
-> 宿舍电费、空闲教室、图书馆（校园网 H5）**均已接通；校园卡按需未做。
-> 少数界面细节仍在真机核对，进度与已知限制见
+> 宿舍电费、空闲教室**均已接通；**图书馆（座位/研讨间）尚未实现**（协议已测绘，
+> 见 [`docs/interfaces/hpu-library-protocol.md`](docs/interfaces/hpu-library-protocol.md)，代码层未开工）；
+> 校园卡按需求未做。进度与已知限制见
 > [`docs/河南理工适配方案.md`](docs/河南理工适配方案.md)。
 >
 > 下方功能清单更新记录描述的是**上游郑州大学版**的既有实现，保留作为移植参考。
@@ -22,6 +23,9 @@
 
 ## 功能特性
 
+> 本节是**上游郑大版的功能全集**，用于说明整体设计意图。河南理工版当前实现范围见顶部适配状态；
+> 标 ⛔ 的是**本仓库尚未实现**的部分，不要按本节描述期待它已在河南理工版可用。
+
 **学习**
 
 - **课表**：学期 / 教学周切换，周次表头带日期（`09-30`，今天高亮）、冲突课程占位与按周显示选择、自定义日程（可与教务课混排、撞课提醒）、
@@ -33,9 +37,10 @@
 **生活**
 
 - **电费**：照明 / 空调两套表计的余额、每日用量、电费估算、按日明细、余额趋势；
-  房间号内置 59 栋楼的房间表（选楼栋 → 选房号），也支持手动填 ID
-- **校园卡**：余额、日 / 周 / 月 / 年消费、流水明细与筛选
-- **图书馆座位**：内嵌学校原版网页（自动用统一身份认证登录）
+  河南理工版为**三级联动**（楼栋 → 楼层 → 房间，房间号取自学校字典，不内置房间表）
+- ⛔ **校园卡**：余额、日 / 周 / 月 / 年消费、流水明细与筛选（按需求不做）
+- ⛔ **图书馆座位**：内嵌学校原版网页（自动用统一身份认证登录）——**尚未实现**，
+  协议已测绘，见 [`docs/interfaces/hpu-library-protocol.md`](docs/interfaces/hpu-library-protocol.md)
 
 **桌面小组件**（RemoteViews + XML，不联网、只读本地数据）
 
@@ -205,28 +210,27 @@
      并建议改用「在线选房间」（那是学校服务器给的确切编号），而不是让你手抄；
    - 有些楼只有一套表（如留学生公寓），只填一路即可，不会一直提示"还没设置"。
 3. **离线可用**：课表、专注记录、电费历史都是本地数据，断网也能看；
-   教室占用、图书馆、校园卡需要联网。
+   教室占用需要联网（图书馆、校园卡尚未实现）。
 
 ## 项目结构
 
 ```
 app/src/main/java/com/zzupocket/app/
 ├── core/            纯逻辑与基础设施：手动依赖容器 AppGraph、加密、HTTP 客户端、
-│                    错误文案、课表文本、登录输入体检、学期过滤
+│                    缓存清理、学校配置、错误文案、课表文本、登录输入体检
 ├── data/
-│   ├── auth/        CAS 统一认证（MFA / 短信 / 令牌刷新）
-│   ├── eas/         教务系统（课表、节次、教室占用）
-│   ├── ecard/       一卡通（电费、校园卡流水）
-│   ├── lib/         图书馆（WebView 会话与探测）
-│   ├── db/          Room 实体与 DAO
-│   ├── prefs/       DataStore（界面偏好、专注偏好、登录冷却）+ 加密令牌
-│   ├── room/        宿舍楼房间表（assets/rooms.json）
+│   ├── auth/        HPU 统一认证（WebView 登录 → Cookie 加密持久化 → 启动恢复）
+│   ├── eas/         教务系统（课表解析、节次、空闲教室、教室字典）
+│   ├── electricity/ 宿舍电费（南校区 WebForms / 北校区三级联动）与结果解析
+│   ├── db/          Room 实体与 DAO、通用 TTL 缓存
+│   ├── prefs/       DataStore（界面 / 小组件 / 专注偏好）+ 加密令牌
 │   ├── repo/        Repository：把接口与本地库缝在一起
-│   └── work/        定时采样电量（WorkManager）
-├── domain/          纯数据模型与统计口径（课表、用电、专注、校园卡、周次对齐）
+│   └── update/      GitHub Release 版本检测
+├── domain/          纯数据模型与统计口径（课表、节次、冲突分段、周次对齐）
 ├── focus/           番茄钟引擎、通知、前台服务
-└── ui/              Compose 界面：today / schedule / focus / campus / library /
-                     widget（桌面小组件）/ login / about / diag / theme / nav
+└── ui/              Compose 界面：today / schedule / focus / campus / electricity /
+                     room（空闲教室）/ web（微后勤 H5）/ settings / widget（桌面小组件）/
+                     login / about / diag / theme / nav
 
 app/src/main/res/    资源：布局（含 widget_* 小组件布局）、配色、字符串、预览图
 docs/                项目文档（接口契约、实测坑、设计推演），见下方「文档」
@@ -240,8 +244,8 @@ tools/               开发脚本（如按真机几何生成小组件预览图�
 | 语言 / UI | Kotlin 2.0 + Jetpack Compose + Material 3（含 Material You 动态取色与 8 套预设配色） |
 | 依赖注入 | **手写**（`core/AppGraph.kt`）—— 依赖不多，P1 最大的风险是接口协议而不是 DI |
 | 网络 | OkHttp + kotlinx.serialization（**不用 Retrofit**：接口少，且 CAS 登录的 POST 参数走 query string，裸 OkHttp 更直接） |
-| 本地存储 | Room（课表 / 专注 / 电量采样 / 流水）、DataStore（偏好）、EncryptedSharedPreferences + Tink（令牌） |
-| 后台 | WorkManager（每 4 小时采样一次电量）+ 前台服务（番茄钟）+ AlarmManager（小组件在上下课时刻刷新） |
+| 本地存储 | Room（课表 / 专注 / 通用 TTL 缓存）、DataStore（偏好）、EncryptedSharedPreferences + Tink（会话凭据） |
+| 后台 | 前台服务（番茄钟计时）+ AlarmManager（小组件在上下课时刻刷新） |
 | 桌面小组件 | AppWidgetProvider + RemoteViews + XML（**不用 Glance**，理由见 `docs/design/UI与登录设计.md` §2.6） |
 | 后端 | **没有**。不经过任何自建中转服务器，账号凭据与数据只在设备和学校系统之间流动 |
 

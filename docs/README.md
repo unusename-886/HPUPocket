@@ -23,7 +23,7 @@
 | [教务登录协议](interfaces/hpu-login-protocol.md) | 统一认证登录全流程、教务 EAMS 登录页的加密逻辑 |
 | [教务课表协议](interfaces/hpu-eams-protocol.md) | 课表数据形状、周次与节次编码、解析要点 |
 | [宿舍电费协议](interfaces/hpu-electricity-protocol.md) | 南北校区电费系统：WebForms 多级回发、楼栋/楼层/房间字典、结果页解析 |
-| [图书馆座位/研讨间](interfaces/hpu-library-protocol.md) | 座位系统与研讨间系统的接口形状、WebVPN 前置 |
+| [图书馆座位/研讨间](interfaces/hpu-library-protocol.md) | 座位系统与研讨间系统的接口形状、WebVPN 前置（**仅协议，App 未实现**） |
 | [空闲教室协议](interfaces/hpu-room-protocol.md) | 教室占用查询的入口链路、表单字段与楼栋字典 |
 | [微后勤用电 H5](interfaces/hnlg-wechat-electricity.md) | 微信内网页的静态逆向：接口清单、扫码登录与 bundle 逆向法 |
 
