@@ -2,19 +2,18 @@
 
 河南理工大学校园助手（Android） · 基于上游项目 [ZZUPocket](https://github.com/3beuml/ZZUPocket)（MIT）适配
 
-> ⚠️ **适配状态（2026-11-19）**：当前为 **P0 品牌与配置层**——应用名、包名、配色、文案、
-> 占位内容已切换为河南理工版本；**教务登录 / 课表 / 电费 / 校园卡 / 图书馆 / 教室占用等
-> 依赖学校接口的模块尚未接入**，界面会明确提示"待接入"，不会去连郑州大学的后端。
-> 分阶段计划、已核实的系统现状与需要补充的抓包材料见
+> **适配状态（2026-11-20，v0.2.7-hpu）**：河南理工版已可用——**统一认证登录、教务课表、
+> 宿舍电费、空闲教室、图书馆（校园网 H5）**均已接通；校园卡按需未做。
+> 少数界面细节仍在真机核对，进度与已知限制见
 > [`docs/河南理工适配方案.md`](docs/河南理工适配方案.md)。
 >
-> 下方功能清单更新记录描述的是**上游郑州大学版**的既有实现，保留作为待移植模块的设计参考。
+> 下方功能清单更新记录描述的是**上游郑州大学版**的既有实现，保留作为移植参考。
 
-[![License](https://img.shields.io/github/license/3beuml/ZZUPocket.svg?style=flat)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/3beuml/ZZUPocket?style=flat&label=release)](../../releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.2.7--hpu-brightgreen)](../../releases)
 [![Android](https://img.shields.io/badge/Android-12%2B-3ddc84?style=flat&logo=android&logoColor=white)](#构建)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-7f52ff?style=flat&logo=kotlin&logoColor=white)](#技术栈)
-[![Tests](https://img.shields.io/badge/unit%20tests-223-brightgreen?style=flat)](#参与贡献)
+[![Tests](https://img.shields.io/badge/unit%20tests-288-brightgreen)](#参与贡献)
 
 > ⚠️ 本项目是非官方项目。
 > 接口来自公开网页的协议整理与社区项目经验，**随时可能失效或被学校调整**；

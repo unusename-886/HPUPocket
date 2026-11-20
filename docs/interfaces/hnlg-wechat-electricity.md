@@ -127,7 +127,8 @@ http://ykt.hpu.edu.cn/server/auth/host/open?host=27&org=2&mer=0&app=electric&s_h
 - 加载 `SchoolConfig.URL_HNLG`，即用户给定的 hash 路由。
 - WebView 配置：`javaScriptEnabled`、`domStorageEnabled`(localStorage 存 token)、
   `CookieManager` 接受第三方 Cookie、`userAgent` 去掉 `;wv`（与可登录的移动端环境一致）。
-- 注入 `WebViewVhFix`（本工程 WebView 的 `vh=0` 老问题，见 `图书馆WebView灰屏.md`）。
+- 注入 `WebViewVhFix`（用于规避本工程 WebView 的 `vh=0` 老问题，实现见
+  `ui/web/WebViewVhFix`）。
 - `shouldOverrideUrlLoading`：`tel:` → 系统拨号；`http(s)` 站内继续 WebView 内跳转；
   微信 OAuth (`open.weixin.qq.com`) 允许加载以便完成登录。
 - 顶栏提供「在微信中打开」兜底按钮（用微信扫码登录更稳妥）。
